@@ -128,6 +128,7 @@ export type JobRepositoryWorkspace = {
   devCommand: string;
   healthUrl: string;
   status: JobRepositoryStatus;
+  devProcessId?: number;
   lastError?: string;
 };
 

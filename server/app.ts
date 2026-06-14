@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import "./env";
 import cors from "cors";
@@ -55,6 +55,7 @@ const githubConnection: GitHubConnection = {
   connected: false,
   scopes: [],
 };
+const jobDevProcesses = new Map<string, ChildProcess>();
 
 state.openAI = {
   ...state.openAI,
@@ -368,7 +369,9 @@ app.post("/api/workspace/run", async (_request, response) => {
   state.running = true;
   try {
     await cloneJobRepositories(job, gitHubToken);
+    await startJobRepositories(job);
   } catch (error) {
+    stopJobProcesses();
     state.running = false;
     response.status(502).json({
       error: "repository_clone_failed",
@@ -404,6 +407,7 @@ app.post("/api/workspace/run", async (_request, response) => {
 });
 
 app.post("/api/workspace/stop", (_request, response) => {
+  stopJobProcesses();
   state.running = false;
   state.workspace.services = state.workspace.services.map((service) => ({
     ...service,
@@ -686,6 +690,47 @@ async function cloneJobRepositories(job: JobRunState, token: string) {
   job.updatedAt = new Date().toISOString();
 }
 
+async function startJobRepositories(job: JobRunState) {
+  job.status = "running";
+  job.currentAction = "Installing dependencies";
+  job.updatedAt = new Date().toISOString();
+
+  for (const repository of job.plan.repositories) {
+    repository.status = "installing";
+    job.logs.unshift(`[exec.md] ${repository.id} install: ${repository.installCommand}`);
+    state.logs.unshift(`[exec.md] ${repository.id} install: ${repository.installCommand}`);
+    const install = await runShellCommand(repository.installCommand, repository.localPath);
+    if (install.exitCode !== 0) {
+      repository.status = "failed";
+      repository.lastError = install.output || `${repository.installCommand} failed`;
+      job.status = "failed";
+      job.currentAction = `Install failed for ${repository.id}`;
+      job.logs.unshift(`[exec.md] ${repository.id} install failed: ${repository.lastError}`);
+      throw new Error(repository.lastError);
+    }
+
+    repository.status = "starting";
+    job.currentAction = `Starting ${repository.id}`;
+    job.logs.unshift(`[exec.md] ${repository.id} dev: ${repository.devCommand}`);
+    state.logs.unshift(`[exec.md] ${repository.id} dev: ${repository.devCommand}`);
+    const child = spawnShellProcess(repository.devCommand, repository.localPath);
+    repository.devProcessId = child.pid;
+    jobDevProcesses.set(`${job.id}:${repository.id}`, child);
+  }
+
+  job.currentAction = "Waiting for health checks";
+  for (const repository of job.plan.repositories) {
+    await waitForHealth(repository.healthUrl, 45_000);
+    repository.status = "healthy";
+    job.logs.unshift(`[health] ${repository.id} healthy at ${repository.healthUrl}`);
+    state.logs.unshift(`[health] ${repository.id} healthy at ${repository.healthUrl}`);
+  }
+
+  job.status = "healthy";
+  job.currentAction = "Localhost preview ready";
+  job.updatedAt = new Date().toISOString();
+}
+
 async function runGit(args: string[], cwd = ".") {
   const result = await runCommand("git", args, cwd);
   if (result.exitCode !== 0) {
@@ -694,12 +739,35 @@ async function runGit(args: string[], cwd = ".") {
   return result.output;
 }
 
-function runCommand(command: string, args: string[], cwd: string) {
+function runShellCommand(command: string, cwd: string) {
+  return runCommand(command, [], cwd, true);
+}
+
+function spawnShellProcess(command: string, cwd: string) {
+  const child = spawn(command, [], {
+    cwd,
+    shell: true,
+    windowsHide: true,
+    env: process.env,
+  });
+  child.stdout.on("data", (chunk) => {
+    state.logs.unshift(`[process] ${String(chunk).trim()}`);
+  });
+  child.stderr.on("data", (chunk) => {
+    state.logs.unshift(`[process] ${String(chunk).trim()}`);
+  });
+  return child;
+}
+
+function runCommand(command: string, args: string[], cwd: string): Promise<{ exitCode: number; output: string }>;
+function runCommand(command: string, args: string[], cwd: string, shell: boolean): Promise<{ exitCode: number; output: string }>;
+function runCommand(command: string, args: string[], cwd: string, shell = false) {
   return new Promise<{ exitCode: number; output: string }>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
-      shell: false,
+      shell,
       windowsHide: true,
+      env: process.env,
     });
     const output: string[] = [];
 
@@ -713,6 +781,38 @@ function runCommand(command: string, args: string[], cwd: string) {
       });
     });
   });
+}
+
+async function waitForHealth(url: string, timeoutMs: number) {
+  const startedAt = Date.now();
+  let lastError = "";
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        return;
+      }
+      lastError = `${url} returned ${response.status}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "health request failed";
+    }
+    await delay(1_000);
+  }
+  throw new Error(`Health check timed out for ${url}: ${lastError}`);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function stopJobProcesses() {
+  for (const [key, child] of jobDevProcesses) {
+    if (!child.killed) {
+      child.kill();
+      state.logs.unshift(`[process] stopped ${key}`);
+    }
+  }
+  jobDevProcesses.clear();
 }
 
 function withGitHubToken(cloneUrl: string, token: string) {
