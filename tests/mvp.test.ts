@@ -149,6 +149,20 @@ describe("MVP core workflow", () => {
     );
   });
 
+  it("encodes a local GitHub App OAuth callback URL", () => {
+    const url = buildGitHubAuthorizeUrl({
+      clientId: "client_abc",
+      redirectUri: "http://localhost:8787/api/integrations/github/callback",
+      state: "corvin-local-demo",
+      scopes: ["repo", "read:org"],
+    });
+
+    expect(url).toContain("client_id=client_abc");
+    expect(url).toContain("redirect_uri=http%3A%2F%2Flocalhost%3A8787%2Fapi%2Fintegrations%2Fgithub%2Fcallback");
+    expect(url).toContain("state=corvin-local-demo");
+    expect(url).toContain("scope=repo+read%3Aorg");
+  });
+
   it("builds a WhatsApp linked-device QR descriptor", () => {
     const connect = buildWhatsAppConnect({
       connected: false,
