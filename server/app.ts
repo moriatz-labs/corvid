@@ -5,6 +5,7 @@ import "./env";
 import cors from "cors";
 import express from "express";
 import OpenAI from "openai";
+import { chromium } from "playwright";
 import QRCode from "qrcode";
 import {
   buildGitHubAuthorizeUrl,
@@ -69,6 +70,7 @@ syncExecFromDisk();
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+app.use("/artifacts", express.static(".corvin/jobs"));
 
 app.get("/api/state", (_request, response) => {
   response.json(state);
@@ -509,42 +511,6 @@ app.post("/api/jobs/:jobId/pull-request", async (_request, response) => {
   }
 });
 
-app.post("/api/jobs/:jobId/merge", async (_request, response) => {
-  const job = findJob(String(_request.params.jobId));
-  if (!job) {
-    response.status(404).json({ error: "job_not_found" });
-    return;
-  }
-  const token = getGitHubCloneToken();
-  if (!token) {
-    response.status(409).json({
-      error: "github_token_required",
-      message: "Connect GitHub or set GITHUB_TOKEN before merging pull requests.",
-      job,
-    });
-    return;
-  }
-  if (job.pullRequests.length === 0) {
-    response.status(409).json({
-      error: "pull_request_required",
-      message: "Create a pull request before merging this job.",
-      job,
-    });
-    return;
-  }
-
-  try {
-    await mergePullRequestsForJob(job, token);
-    response.json(job);
-  } catch (error) {
-    job.status = "failed";
-    job.currentAction = "Pull request merge failed";
-    job.logs.unshift(error instanceof Error ? redactToken(error.message, token) : "Pull request merge failed");
-    job.updatedAt = new Date().toISOString();
-    response.status(502).json({ error: "pull_request_merge_failed", job });
-  }
-});
-
 app.post("/api/openai/change-plan", async (request, response) => {
   const requestBody = String(request.body.requestBody ?? state.requests[0]?.body ?? "");
   const basePlan = createOpenAIChangePlan({
@@ -949,6 +915,8 @@ async function applyJobChange(job: JobRunState, request: MvpState["requests"][nu
   }
   await runGit(["add", "-N", "."], repository.localPath);
   await refreshJobDiff(job);
+  updateJobReviewPackage(job, request, feedback);
+  await captureJobScreenshots(job);
   job.status = "waiting-for-approval";
   job.currentAction = "Waiting for approval";
   job.updatedAt = new Date().toISOString();
@@ -1036,6 +1004,83 @@ function applyCopyEdit(source: string, replacementText: string) {
   return source;
 }
 
+function updateJobReviewPackage(job: JobRunState, request: MvpState["requests"][number], feedback: string) {
+  const changed = job.changedFiles.map((file) => `${file.repositoryId}/${file.path}`).join(", ");
+  const previousScreenshots = job.reviewPackage?.screenshots ?? [];
+  job.reviewPackage = {
+    wrong: request.body.trim() || "The request did not include enough detail.",
+    fixed: changed ? `Changed files: ${changed}.` : "Applied the requested repository change.",
+    revised: feedback.trim() || "No revision feedback has been applied yet.",
+    screenshots: previousScreenshots,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function captureJobScreenshots(job: JobRunState) {
+  const targets = job.plan.repositories
+    .filter((repository) => repository.healthUrl.startsWith("http"))
+    .slice(0, 2);
+  if (targets.length === 0) return;
+
+  const screenshots = [];
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch({ headless: true });
+    for (const repository of targets) {
+      const capturedAt = new Date().toISOString();
+      const fileName = `${repository.id}-local.png`;
+      const relativePath = `${job.id}/screenshots/${fileName}`;
+      const filePath = `.corvin/jobs/${relativePath}`;
+      mkdirSync(dirname(filePath), { recursive: true });
+      const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+      try {
+        await page.goto(repository.healthUrl, { waitUntil: "networkidle", timeout: 15_000 });
+        await page.screenshot({ path: filePath, fullPage: true });
+        screenshots.push({
+          label: `${repository.id} local preview`,
+          url: `/artifacts/${relativePath}`,
+          path: filePath,
+          capturedAt,
+          status: "captured" as const,
+        });
+        job.logs.unshift(`[screenshot] captured ${repository.healthUrl}`);
+      } catch (error) {
+        screenshots.push({
+          label: `${repository.id} local preview`,
+          url: repository.healthUrl,
+          path: filePath,
+          capturedAt,
+          status: "failed" as const,
+          error: error instanceof Error ? error.message : "Screenshot capture failed",
+        });
+        job.logs.unshift(`[screenshot] failed ${repository.healthUrl}`);
+      } finally {
+        await page.close();
+      }
+    }
+  } catch (error) {
+    const capturedAt = new Date().toISOString();
+    screenshots.push({
+      label: "Local preview",
+      url: targets[0]?.healthUrl ?? "",
+      path: "",
+      capturedAt,
+      status: "failed" as const,
+      error: error instanceof Error ? error.message : "Playwright could not start",
+    });
+  } finally {
+    await browser?.close();
+  }
+
+  job.reviewPackage = {
+    wrong: job.reviewPackage?.wrong ?? "",
+    fixed: job.reviewPackage?.fixed ?? "",
+    revised: job.reviewPackage?.revised ?? "",
+    screenshots,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 async function refreshJobDiff(job: JobRunState) {
   const diffs: string[] = [];
   const changedFiles: JobChangedFile[] = [];
@@ -1072,6 +1117,11 @@ function mapGitStatus(statusCode: string) {
 
 async function createPullRequestsForJob(job: JobRunState, token: string) {
   await refreshJobDiff(job);
+  const request = state.requests.find((item) => item.id === job.requestId);
+  if (request) {
+    updateJobReviewPackage(job, request, "");
+    await captureJobScreenshots(job);
+  }
   if (job.changedFiles.length === 0) {
     throw new Error("No changed files are available to push.");
   }
@@ -1145,55 +1195,34 @@ async function createGitHubPullRequest(
   };
 }
 
-async function mergePullRequestsForJob(job: JobRunState, token: string) {
-  for (const pullRequest of job.pullRequests.filter((item) => item.status === "open")) {
-    await mergeGitHubPullRequest(pullRequest.repo, pullRequest.number, token);
-    pullRequest.status = "merged";
-    job.logs.unshift(`[merge] merged ${pullRequest.repo}#${pullRequest.number}`);
-    state.logs.unshift(`[merge] merged ${pullRequest.url}`);
-  }
-
-  job.status = "merged";
-  job.currentAction = "Merged";
-  job.finalUrl = job.plan.repositories[0]?.healthUrl;
-  job.updatedAt = new Date().toISOString();
-}
-
-async function mergeGitHubPullRequest(repo: string, number: number, token: string) {
-  const normalized = repo.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
-  const response = await fetch(`https://api.github.com/repos/${normalized}/pulls/${number}/merge`, {
-    method: "PUT",
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "User-Agent": "corvin-local-agent",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-    body: JSON.stringify({
-      merge_method: "merge",
-      commit_title: `Merge Corvin job ${number}`,
-    }),
-  });
-  const payload = (await response.json()) as { merged?: boolean; message?: string };
-  if (!response.ok || !payload.merged) {
-    throw new Error(payload.message ?? `GitHub pull request merge failed with ${response.status}`);
-  }
-}
-
 function renderPullRequestBody(job: JobRunState, repositoryId: string) {
   const files = job.changedFiles
     .filter((file) => file.repositoryId === repositoryId)
     .map((file) => `- ${file.status}: ${file.path}`)
     .join("\n");
+  const screenshots = job.reviewPackage?.screenshots
+    .map((screenshot) => `- ${screenshot.status}: ${screenshot.label} (${screenshot.url})`)
+    .join("\n");
   return [
     `Corvin job: ${job.id}`,
+    "",
+    "## What was wrong",
+    job.reviewPackage?.wrong ?? "Not captured.",
+    "",
+    "## What was fixed",
+    job.reviewPackage?.fixed ?? "Not captured.",
+    "",
+    "## What was revised",
+    job.reviewPackage?.revised ?? "No revision feedback was applied.",
     "",
     "## Changed files",
     files || "- No files captured",
     "",
+    "## Local screenshots",
+    screenshots || "- No screenshots captured",
+    "",
     "## Review",
-    "Review the diff, request changes in Corvin if needed, then merge after approval.",
+    "Engineering owns the final review decision. Corvin only prepares the branch, local evidence, and review summary.",
   ].join("\n");
 }
 

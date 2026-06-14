@@ -4,7 +4,6 @@ import {
   Loader2,
   MessageCircle,
   QrCode,
-  Rocket,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -214,30 +213,6 @@ export default function App() {
     setReviewDecision("idle");
   }
 
-  async function deployProduction() {
-    const job = state.jobs[0];
-    if (job?.pullRequests.some((pullRequest) => pullRequest.status === "open")) {
-      await runAction(
-        "merge-pr",
-        () => api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/merge`, { method: "POST" }),
-        (nextJob) =>
-          setState((current) => ({
-            ...current,
-            jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
-          })),
-      );
-      setReviewDecision("idle");
-      return;
-    }
-
-    await runAction(
-      "production",
-      () => api<DeploymentDemoState>("/api/deploy/production", { method: "POST" }),
-      (deployment) => setState((current) => ({ ...current, deployment })),
-    );
-    setReviewDecision("idle");
-  }
-
   async function applyJobChange() {
     const job = state.jobs[0];
     if (!job) return;
@@ -405,7 +380,6 @@ export default function App() {
             onApplyChange={() => void applyJobChange()}
             onCreatePullRequest={() => void createJobPullRequest()}
             onStage={() => void deployStaging()}
-            onProduction={() => void deployProduction()}
             onDemote={() => void requestJobChanges()}
             onStop={() => void stopWorkspace(false)}
           />
@@ -803,10 +777,6 @@ function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revis
   const latestRequest = state.requests[0];
   const latestJob = state.jobs[0];
   const stagingReady = state.deployment.staging.status === "ready";
-  const productionAccepted =
-    stagingReady &&
-    state.deployment.production.status === "live" &&
-    state.deployment.production.headline === state.deployment.staging.headline;
 
   if (!execReady) {
     return {
@@ -878,13 +848,6 @@ function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revis
       tone: "info",
     };
   }
-  if (latestJob?.status === "merged") {
-    return {
-      label: "Merged",
-      detail: latestJob.finalUrl ? `Final output is available at ${latestJob.finalUrl}.` : "The job pull request has been merged.",
-      tone: "success",
-    };
-  }
   if (!state.running) {
     return {
       label: "Getting repository",
@@ -906,10 +869,10 @@ function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revis
       tone: "warning",
     };
   }
-  if (!productionAccepted) {
+  if (stagingReady) {
     return {
       label: "Waiting for approval",
-      detail: "A preview is ready. Accept it or send it back from this job.",
+      detail: "A local preview is ready. Create a PR for engineering review or send it back for changes.",
       tone: "warning",
     };
   }
@@ -1073,7 +1036,6 @@ function JobSurface({
   onApplyChange,
   onCreatePullRequest,
   onStage,
-  onProduction,
   onDemote,
   onStop,
 }: {
@@ -1092,7 +1054,6 @@ function JobSurface({
   onApplyChange: () => void;
   onCreatePullRequest: () => void;
   onStage: () => void;
-  onProduction: () => void;
   onDemote: () => void;
   onStop: () => void;
 }) {
@@ -1123,7 +1084,6 @@ function JobSurface({
           deployment={state.deployment}
           loading={loading}
           onStage={onStage}
-          onProduction={onProduction}
           onDemote={onDemote}
           reviewDecision={reviewDecision}
         />
@@ -1175,6 +1135,31 @@ function JobSurface({
                   </div>
                 </div>
               ) : null}
+              {latestJob.reviewPackage ? (
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="font-primary text-xs font-medium">Engineering review summary</p>
+                  <div className="mt-2 grid gap-2 font-body text-xs text-muted-foreground">
+                    <p><span className="text-foreground">Wrong:</span> {latestJob.reviewPackage.wrong}</p>
+                    <p><span className="text-foreground">Fixed:</span> {latestJob.reviewPackage.fixed}</p>
+                    <p><span className="text-foreground">Revised:</span> {latestJob.reviewPackage.revised}</p>
+                  </div>
+                  {latestJob.reviewPackage.screenshots.length > 0 ? (
+                    <div className="mt-2 grid gap-1">
+                      {latestJob.reviewPackage.screenshots.map((screenshot) => (
+                        <a
+                          key={`${screenshot.label}-${screenshot.capturedAt}`}
+                          className="break-all font-mono text-[11px] text-foreground underline"
+                          href={screenshot.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {screenshot.status}: {screenshot.label}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               {latestJob.pullRequests.length > 0 ? (
                 <div className="mt-3 border-t border-border pt-3">
                   <p className="font-primary text-xs font-medium">Pull requests</p>
@@ -1191,19 +1176,6 @@ function JobSurface({
                       </a>
                     ))}
                   </div>
-                </div>
-              ) : null}
-              {latestJob.finalUrl ? (
-                <div className="mt-3 border-t border-border pt-3">
-                  <p className="font-primary text-xs font-medium">Final output</p>
-                  <a
-                    className="mt-2 block break-all font-mono text-[11px] text-foreground underline"
-                    href={latestJob.finalUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {latestJob.finalUrl}
-                  </a>
                 </div>
               ) : null}
             </div>
@@ -1278,35 +1250,30 @@ function DeploymentPanel({
   deployment,
   loading,
   onStage,
-  onProduction,
   onDemote,
   reviewDecision,
 }: {
   deployment: DeploymentDemoState;
   loading: string | null;
   onStage: () => void;
-  onProduction: () => void;
   onDemote: () => void;
   reviewDecision: "idle" | "needs-revision";
 }) {
   const stagingReady = deployment.staging.status === "ready";
-  const productionAccepted =
-    stagingReady && deployment.production.status === "live" && deployment.production.headline === deployment.staging.headline;
 
   return (
     <Card>
       <CardHeader>
         <div>
           <CardTitle>Review build</CardTitle>
-          <CardDescription>Promote only after the prepared preview is ready.</CardDescription>
+          <CardDescription>Prepare local evidence for engineering review.</CardDescription>
         </div>
-        <Badge tone={productionAccepted ? "success" : stagingReady ? "info" : "neutral"}>
-          {productionAccepted ? "Accepted" : stagingReady ? "Ready to review" : "No review yet"}
+        <Badge tone={stagingReady ? "info" : "neutral"}>
+          {stagingReady ? "Ready for PR" : "No review yet"}
         </Badge>
       </CardHeader>
-      <div className="grid gap-3 xl:grid-cols-2">
+      <div className="grid gap-3">
         <EnvironmentPreview env={stagingReady ? deployment.staging : deployment.local} />
-        <EnvironmentPreview env={deployment.production} compact />
       </div>
       <div className="mt-5 flex flex-wrap gap-2">
         {!stagingReady ? (
@@ -1314,11 +1281,9 @@ function DeploymentPanel({
             {loading === "staging" ? "Preparing..." : "Prepare review"}
           </Button>
         ) : null}
-        {stagingReady && !productionAccepted && reviewDecision === "idle" ? (
+        {stagingReady && reviewDecision === "idle" ? (
           <>
-            <Button icon={<Rocket size={16} />} onClick={onProduction} disabled={loading !== null}>
-              {loading === "production" || loading === "merge-pr" ? "Accepting..." : "Accept to production"}
-            </Button>
+            <Badge tone="info">Ready for engineering review</Badge>
             <Button variant="secondary" onClick={onDemote} disabled={loading !== null}>
               Send back
             </Button>

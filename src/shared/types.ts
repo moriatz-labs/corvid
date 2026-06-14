@@ -152,7 +152,7 @@ export type JobPullRequest = {
   repo: string;
   url: string;
   number: number;
-  status: "open" | "merged";
+  status: "open";
 };
 
 export type JobFileEditPlan = {
@@ -160,6 +160,23 @@ export type JobFileEditPlan = {
   replacementText: string;
   fallbackFile: string;
   summary: string;
+};
+
+export type JobScreenshotArtifact = {
+  label: string;
+  url: string;
+  path: string;
+  capturedAt: string;
+  status: "captured" | "failed";
+  error?: string;
+};
+
+export type JobReviewPackage = {
+  wrong: string;
+  fixed: string;
+  revised: string;
+  screenshots: JobScreenshotArtifact[];
+  updatedAt: string;
 };
 
 export type JobRunStatus =
@@ -172,7 +189,6 @@ export type JobRunStatus =
   | "waiting-for-approval"
   | "waiting-for-changes"
   | "pr-open"
-  | "merged"
   | "failed";
 
 export type JobRunState = {
@@ -185,9 +201,9 @@ export type JobRunState = {
   changedFiles: JobChangedFile[];
   diff?: string;
   pullRequests: JobPullRequest[];
+  reviewPackage?: JobReviewPackage;
   startedAt: string;
   updatedAt: string;
-  finalUrl?: string;
 };
 
 export type EngineeringIntakeItem = {
