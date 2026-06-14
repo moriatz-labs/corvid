@@ -1,9 +1,18 @@
+import YAML from "yaml";
 import type {
   BlueprintCheck,
+  ExecDocument,
+  ExecEnvVar,
+  ExecParseResult,
+  ExecRunPlanResult,
+  ExecSetupState,
+  ExecValidationIssue,
+  ExecValidationResult,
   GithubOAuthConfig,
   PMRequest,
   DeploymentDemoState,
   OpenAIChangePlan,
+  OpenAIRoute,
   ValidationResult,
   WhatsAppConnect,
   WhatsAppIntake,
@@ -17,11 +26,234 @@ type ValidationInput = {
   occupiedPorts: number[];
 };
 
+const emptyExecValidation: ExecValidationResult = {
+  ready: false,
+  errors: [
+    {
+      id: "exec-missing",
+      label: "exec.md is missing",
+      detail: "Create exec.md before Corvin can package the local run workflow.",
+      severity: "error",
+    },
+  ],
+  warnings: [],
+};
+
+export function createEmptyExecSetup(markdown = "") {
+  return {
+    exists: false,
+    markdown,
+    validation: emptyExecValidation,
+  };
+}
+
+export function createExecDraftFromBlueprint(blueprint: WorkspaceBlueprint): string {
+  return renderExecMarkdown({
+    purpose: `Run ${blueprint.name} locally for PM review.`,
+    repositories: blueprint.repositories.map((repository) => {
+      const service = blueprint.services.find((item) => item.repositoryId === repository.id);
+      const startupCommand = repository.startupCommand?.trim() || "";
+      const commands = splitStartupCommand(startupCommand);
+      return {
+        id: repository.id,
+        repo: repository.sourceRef.replace(/^synced-repo:\/\//, ""),
+        role: repository.purpose ?? repository.label,
+        install: commands.install,
+        dev: commands.dev,
+        health: service?.healthUrl ?? "",
+      };
+    }),
+    environment: {
+      global: blueprint.environment.required.map((key) => ({
+        name: key,
+        required: true,
+        description: `Required to run ${blueprint.name} locally.`,
+      })),
+      perRepo: {},
+    },
+    localRunNotes: blueprint.executionScriptSummary ?? "Add setup caveats, seed data, known local failures, and port notes here.",
+  });
+}
+
+export function renderExecMarkdown(document: ExecDocument): string {
+  const repositoriesYaml = YAML.stringify({ repositories: document.repositories }).trimEnd();
+  const environmentYaml = YAML.stringify(document.environment).trimEnd();
+
+  return [
+    "# exec.md",
+    "",
+    "## Purpose",
+    document.purpose.trim(),
+    "",
+    "## Repositories",
+    "```yaml",
+    repositoriesYaml,
+    "```",
+    "",
+    "## Environment",
+    "```yaml",
+    environmentYaml,
+    "```",
+    "",
+    "## Local Run Notes",
+    document.localRunNotes.trim(),
+    "",
+  ].join("\n");
+}
+
+export function parseExecMarkdown(markdown: string): ExecParseResult {
+  const purpose = extractMarkdownSection(markdown, "Purpose").trim();
+  const localRunNotes = extractMarkdownSection(markdown, "Local Run Notes").trim();
+  const repositoryBlock = extractFencedYaml(markdown, "Repositories");
+  const environmentBlock = extractFencedYaml(markdown, "Environment");
+  const errors: ExecValidationIssue[] = [];
+
+  if (!repositoryBlock) {
+    errors.push(createExecIssue("exec-repositories-yaml", "Repository YAML is missing", "Add a fenced YAML block under Repositories."));
+  }
+  if (!environmentBlock) {
+    errors.push(createExecIssue("exec-environment-yaml", "Environment YAML is missing", "Add a fenced YAML block under Environment."));
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  try {
+    const repositoryYaml = YAML.parse(repositoryBlock ?? "") as { repositories?: unknown };
+    const environmentYaml = YAML.parse(environmentBlock ?? "") as { global?: unknown; perRepo?: unknown };
+    const repositories = Array.isArray(repositoryYaml.repositories) ? repositoryYaml.repositories.map(coerceExecRepository) : [];
+    const environment = {
+      global: Array.isArray(environmentYaml.global) ? environmentYaml.global.map(coerceExecEnvVar) : [],
+      perRepo: coercePerRepoEnv(environmentYaml.perRepo),
+    };
+
+    return {
+      ok: true,
+      document: {
+        purpose,
+        repositories,
+        environment,
+        localRunNotes,
+      },
+      errors: [],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      errors: [
+        createExecIssue(
+          "exec-yaml-parse",
+          "exec.md YAML could not be parsed",
+          error instanceof Error ? error.message : "The structured YAML blocks are invalid.",
+        ),
+      ],
+    };
+  }
+}
+
+export function validateExecDocument(
+  document: ExecDocument,
+  env: Record<string, string | undefined> = {},
+): ExecValidationResult {
+  const errors: ExecValidationIssue[] = [];
+  const warnings: ExecValidationIssue[] = [];
+  const repoIds = new Set<string>();
+
+  if (document.repositories.length === 0) {
+    errors.push(createExecIssue("exec-repositories-empty", "No repositories selected", "Select at least one GitHub-linked repository."));
+  }
+
+  for (const repository of document.repositories) {
+    if (!repository.id.trim()) {
+      errors.push(createExecIssue("repo-id", "Repository id is missing", "Every selected repository needs an id."));
+    }
+    if (repoIds.has(repository.id)) {
+      errors.push(createExecIssue(`repo-${repository.id}-duplicate`, "Repository id is duplicated", `${repository.id} appears more than once.`));
+    }
+    repoIds.add(repository.id);
+    if (!repository.repo.trim()) {
+      errors.push(createExecIssue(`repo-${repository.id}-repo`, `${repository.id} GitHub repo is missing`, "Pick the repository from the linked GitHub repo dropdown."));
+    }
+    if (!repository.install.trim()) {
+      errors.push(createExecIssue(`repo-${repository.id}-install`, `${repository.id} install command is missing`, "Add the command that installs dependencies."));
+    }
+    if (!repository.dev.trim()) {
+      errors.push(createExecIssue(`repo-${repository.id}-dev`, `${repository.id} dev command is missing`, "Add the command that starts the local service."));
+    }
+    if (!repository.health.trim()) {
+      errors.push(createExecIssue(`repo-${repository.id}-health`, `${repository.id} health check is missing`, "Add a local URL Corvin can check."));
+    } else if (!isValidUrl(repository.health)) {
+      errors.push(createExecIssue(`repo-${repository.id}-health-url`, `${repository.id} health URL is invalid`, `${repository.health} is not a valid URL.`));
+    }
+  }
+
+  for (const variable of collectExecEnvVars(document)) {
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(variable.name)) {
+      errors.push(createExecIssue(`env-${variable.name}-name`, `${variable.name} is not a valid env name`, "Use uppercase letters, numbers, and underscores."));
+    }
+    if (variable.required && !env[variable.name]?.trim()) {
+      errors.push(createExecIssue(`env-${variable.name}-value`, `${variable.name} value is missing`, "Required env values must be configured before local run."));
+    }
+    if (!variable.description.trim()) {
+      warnings.push({
+        ...createExecIssue(`env-${variable.name}-description`, `${variable.name} description is weak`, "Add a short note so teams know where this value comes from."),
+        severity: "warning",
+      });
+    }
+  }
+
+  if (!document.purpose.trim()) {
+    warnings.push({
+      ...createExecIssue("exec-purpose", "Purpose is empty", "Add one sentence describing what this local workspace runs."),
+      severity: "warning",
+    });
+  }
+
+  return {
+    ready: errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+
+export function buildExecRunPlan(document: ExecDocument, env: Record<string, string | undefined>): ExecRunPlanResult {
+  const validation = validateExecDocument(document, env);
+  if (!validation.ready) {
+    return {
+      ready: false,
+      errors: validation.errors,
+    };
+  }
+
+  return {
+    ready: true,
+    errors: [],
+    plan: {
+      summary: `Run ${document.repositories.length} repositories from exec.md.`,
+      commands: document.repositories.map((repository) => `${repository.id}: ${repository.install} && ${repository.dev}`),
+      healthChecks: document.repositories.map((repository) => `${repository.id}: ${repository.health}`),
+      requiredEnv: collectExecEnvVars(document)
+        .filter((variable) => variable.required)
+        .map((variable) => variable.name),
+    },
+  };
+}
+
 export function validateBlueprint(
   blueprint: WorkspaceBlueprint,
   input: ValidationInput,
 ): ValidationResult {
   const checks: BlueprintCheck[] = [
+    {
+      id: "engineering-packet",
+      label: "Engineering execution packet",
+      status: blueprint.setupStatus === "ready" ? "passed" : "failed",
+      detail:
+        blueprint.setupStatus === "ready"
+          ? "Repository map, startup commands, branch rules, and edge cases are provided"
+          : "Ask engineering to complete the setup packet before a PM request can run",
+    },
     {
       id: "docker",
       label: "Docker runtime",
@@ -66,6 +298,14 @@ export function validateBlueprint(
     ready: checks.every((check) => check.status === "passed"),
     checks,
   };
+}
+
+export function canCapturePMRequest(
+  blueprint: WorkspaceBlueprint,
+  validation: ValidationResult,
+  exec?: ExecSetupState,
+): boolean {
+  return blueprint.setupStatus === "ready" && validation.ready && (exec ? exec.exists && exec.validation.ready : true);
 }
 
 export function generateComposeFile(blueprint: WorkspaceBlueprint): string {
@@ -237,6 +477,56 @@ export function createOpenAIChangePlan(input: {
   };
 }
 
+export function createOpenAIRoutingPlan(): OpenAIRoute[] {
+  return [
+    {
+      id: "triage",
+      label: "Classify PM request",
+      agent: "Router agent",
+      model: "gpt-5.5",
+      taskClass: "routing",
+      reason:
+        "A strong reasoning model decides whether the request is copy-only, bug triage, product experiment, repo setup issue, or unsafe deployment.",
+    },
+    {
+      id: "context",
+      label: "Collect repository context",
+      agent: "Context agent",
+      model: "gpt-5.4-mini",
+      taskClass: "light",
+      reason:
+        "Smaller OpenAI models summarize files, execution-packet fields, logs, and service metadata after the router has chosen the path.",
+    },
+    {
+      id: "execution-plan",
+      label: "Plan code or copy change",
+      agent: "Execution planner",
+      model: "gpt-5.5",
+      taskClass: "heavy",
+      reason:
+        "High-reasoning planning is used when the change spans repositories, branch contracts, deployment safety, or ambiguous product behavior.",
+    },
+    {
+      id: "mechanical-subtasks",
+      label: "Run mechanical subtasks",
+      agent: "Worker agents",
+      model: "gpt-5.4-mini",
+      taskClass: "light",
+      reason:
+        "Routine extraction, checklist updates, changelog drafting, and preview summaries can use lower-cost OpenAI mini models.",
+    },
+    {
+      id: "verification",
+      label: "Verify preview and deployment readiness",
+      agent: "Verification agent",
+      model: "gpt-5.5",
+      taskClass: "verification",
+      reason:
+        "Promotion to production preview requires stronger reasoning over tests, screenshots, logs, and known edge cases.",
+    },
+  ];
+}
+
 export function createDeploymentDemoState(): DeploymentDemoState {
   return {
     local: {
@@ -341,4 +631,91 @@ function inferHeadline(requestBody: string): string {
     return "Checkout that makes the next step obvious.";
   }
   return "Checkout that helps customers finish with confidence.";
+}
+
+function extractMarkdownSection(markdown: string, heading: string): string {
+  const match = markdown.match(new RegExp(`## ${escapeRegExp(heading)}\\n([\\s\\S]*?)(?=\\n## |$)`, "i"));
+  return match?.[1] ?? "";
+}
+
+function extractFencedYaml(markdown: string, heading: string): string | null {
+  const section = extractMarkdownSection(markdown, heading);
+  const match = section.match(/```ya?ml\s*([\s\S]*?)```/i);
+  return match?.[1]?.trim() ?? null;
+}
+
+function coerceExecRepository(value: unknown) {
+  const repository = value as Record<string, unknown>;
+  return {
+    id: String(repository.id ?? "").trim(),
+    repo: String(repository.repo ?? "").trim(),
+    role: String(repository.role ?? "").trim(),
+    install: String(repository.install ?? "").trim(),
+    dev: String(repository.dev ?? "").trim(),
+    health: String(repository.health ?? "").trim(),
+  };
+}
+
+function coerceExecEnvVar(value: unknown): ExecEnvVar {
+  const variable = value as Record<string, unknown>;
+  return {
+    name: String(variable.name ?? "").trim(),
+    required: Boolean(variable.required),
+    description: String(variable.description ?? "").trim(),
+  };
+}
+
+function coercePerRepoEnv(value: unknown): Record<string, ExecEnvVar[]> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([repoId, variables]) => [
+      repoId,
+      Array.isArray(variables) ? variables.map(coerceExecEnvVar) : [],
+    ]),
+  );
+}
+
+function collectExecEnvVars(document: ExecDocument): ExecEnvVar[] {
+  return [
+    ...document.environment.global,
+    ...Object.values(document.environment.perRepo).flat(),
+  ];
+}
+
+function createExecIssue(id: string, label: string, detail: string): ExecValidationIssue {
+  return {
+    id,
+    label,
+    detail,
+    severity: "error",
+  };
+}
+
+function isValidUrl(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function splitStartupCommand(command: string): { install: string; dev: string } {
+  const parts = command.split("&&").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    return {
+      install: parts[0],
+      dev: parts.slice(1).join(" && "),
+    };
+  }
+  return {
+    install: command,
+    dev: command,
+  };
 }

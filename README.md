@@ -1,6 +1,6 @@
 # Corvin Hackathon MVP
 
-Corvin is a PM-visible workbench for running a multi-repository product stack, accepting WhatsApp entry-point requests, using OpenAI-only change planning, reviewing a visible local/staging change, and pushing the reviewed change to a production app demo.
+Corvin is a PM-visible workbench for agentic autonomy in a multi-repository setting. Engineering supplies an execution packet once; OpenAI-powered agents resolve repositories, startup order, branch coupling, and service health; the PM runs one prepared command, reviews a visible local/staging change, and pushes the reviewed result to a production app demo.
 
 ## Run
 
@@ -54,25 +54,85 @@ npm run lint
 ## 10-Step MVP Flow
 
 1. Connect WhatsApp entry point.
-2. Connect GitHub repository sync.
-3. Load workspace blueprint.
-4. Validate setup.
-5. Generate Compose file.
-6. Run workspace.
+2. Resolve repository metadata.
+3. Load engineering execution packet.
+4. Validate agent-run setup.
+5. Generate Compose from the packet.
+6. Run the PM one-line command.
 7. Show service status.
 8. Capture PM request.
-9. Prepare handoff context.
+9. Prepare agent handoff context.
 10. Confirm WhatsApp request has GitHub context.
 
 The dashboard shows these steps and advances them through the local API.
 
+## Engineering Execution Packet
+
+The PM should not manually load, sync, or wire repositories. If `exec.md` is missing or invalid, Corvin blocks the PM request and asks the first user to complete the setup form first.
+
+For the demo, `exec.md` lives in the workspace root. It is a human-editable Markdown file with parseable YAML sections. The setup UI creates it through a hybrid editor: survey fields on the left and editable Markdown preview on the right.
+
+Engineering needs to provide:
+
+- Repository names and ownership.
+- What each repository does.
+- Install, dev, and health-check details for each selected GitHub-linked repository.
+- Global and per-repository environment variables.
+- Local run notes for seed data, known setup failures, ports, and caveats.
+
+After `exec.md` is valid, the PM path is intentionally simple: Corvin reads the file, packages the local run workflow at runtime, and runs the safe-mode demo command set. The PM does not type repo commands.
+
+Example shape:
+
+````md
+# exec.md
+
+## Purpose
+Run Acme Checkout Workspace locally for PM review.
+
+## Repositories
+```yaml
+repositories:
+  - id: web
+    repo: acme/web
+    role: frontend
+    install: pnpm install
+    dev: pnpm dev --host 0.0.0.0
+    health: http://localhost:5173
+```
+
+## Environment
+```yaml
+global:
+  - name: DATABASE_URL
+    required: true
+    description: Local Postgres connection string.
+perRepo: {}
+```
+
+## Local Run Notes
+Add setup caveats, seed data, known local failures, and port notes.
+````
+
+Missing essentials block save/run. Weak documentation and inferred command risks are warnings.
+
+## OpenAI Agent Orchestration
+
+All AI routing uses OpenAI. The current demo shows the intended routing policy:
+
+- `gpt-5.5` as the router and high-reasoning model for classification, multi-repo planning, verification, and deployment readiness.
+- `gpt-5.4-mini` for lower-cost context gathering, file/log summarization, checklist work, and mechanical subtasks.
+- No non-OpenAI AI providers are configured.
+
 ## Demo Story
 
 1. The product manager `Maya Rao` is visible in the dashboard.
-2. Maya asks to change checkout copy.
-3. Corvin generates an OpenAI-only change plan.
-4. The change is applied visibly to local preview and staging.
-5. Maya pushes the staged change to the production app preview.
+2. Show the engineering execution packet as already complete for the Acme Checkout workspace.
+3. Show `exec.md` as the editable engineering setup file for local run packaging.
+4. Maya asks to change checkout copy.
+5. Corvin routes the request through OpenAI-only agents.
+6. The change is applied visibly to local preview and staging.
+7. Maya pushes the staged change to the production app preview.
 
 No non-OpenAI AI providers are configured.
 
@@ -140,7 +200,8 @@ curl -X POST "http://127.0.0.1:8787/api/deploy/production"
 ## Notes
 
 - Docker execution is intentionally safe-mode simulated in this MVP.
-- Compose generation, validation, service health, logs, WhatsApp intake, and GitHub sync state are implemented.
+- Engineering execution-packet readiness, Compose generation, validation, service health, logs, WhatsApp intake, and GitHub sync state are implemented.
 - OpenAI is the only AI provider surface.
+- OpenAI agent routing is implemented as a visible policy surface; actual multi-agent code editing is still simulated.
 - Staging and production are visible demo app previews, not real hosted deployments yet.
 - Real repository editing, branch creation, pushing, and merging are not implemented in this MVP.

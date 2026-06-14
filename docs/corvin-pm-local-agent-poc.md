@@ -6,7 +6,7 @@ Date: 2026-06-14
 
 Build a proof of concept for product managers who want to request small product changes, copy changes, bug fixes, or startup-iteration tasks without personally wiring together multiple repositories, servers, environment variables, and local commands.
 
-The PM should rely on connected communication and repository metadata once those integration workstreams are available, then use engineering-authored setup instructions to run the needed product stack locally through Docker. The first version runs on the PM laptop. The future version can replace the local runner with cloud agents.
+The PM should rely on connected communication and repository metadata once those integration workstreams are available, but the PM should not decide which repositories to sync, which branches to align, or which startup commands to run. Engineering supplies an execution packet once. Corvin agents use that packet to resolve the workspace and produce one PM-safe command. The first version runs on the PM laptop. The future version can replace the local runner with cloud agents.
 
 ## Stripe Minions Research Summary
 
@@ -27,11 +27,12 @@ Sources:
 Corvin should adapt the Minions pattern for PM use cases:
 
 1. Intake starts from the app or the WhatsApp-compatible webhook endpoint.
-2. A workspace blueprint determines which repositories, services, commands, ports, secrets, and health checks are required.
-3. The local runner uses repository metadata supplied by the external sync layer.
-4. Docker Compose starts the stack under a named project.
-5. The PM sees ready links, logs, preview screenshots, and status.
-6. The PM can describe the desired product, copy, or bug-fix change for later handoff once the code integration exists.
+2. If the engineering execution packet is missing, Corvin blocks the PM request and prompts the PM to ask engineering to fill the setup form.
+3. Once the packet exists, OpenAI-powered agents determine which repositories, services, commands, ports, secrets, branch contracts, and health checks are required.
+4. The local runner uses repository metadata supplied by the external sync layer.
+5. Docker Compose starts the stack under a named project.
+6. The PM sees one command, ready links, logs, preview screenshots, and status.
+7. The PM can describe the desired product, copy, or bug-fix change for later handoff once the code integration exists.
 
 Stripe maps to Corvin like this:
 
@@ -44,13 +45,51 @@ Stripe maps to Corvin like this:
 | Human review | Deferred until the synced code repository exists |
 | CI feedback | Local test and health-check feedback first, CI later |
 
+## Engineering Execution Packet
+
+This is the first required artifact. Without it, the PM path should stop and show a clear prompt: "Ask engineering to complete the execution packet for this workspace."
+
+For the demo this artifact is `exec.md`, stored in the Corvin workspace root. It is created through a survey-first setup flow and remains a Markdown file that teams can edit directly. The file is intentionally opinionated: it describes selected repositories, required env vars, and the commands/health checks needed to run locally. It does not model instances in v1.
+
+The setup flow should collect:
+
+| Field | Why Corvin needs it |
+| --- | --- |
+| GitHub-linked repositories | Lets agents identify which repos belong to the product surface without asking the PM to type repo refs. |
+| What each repository does | Lets routing decide whether a request belongs in frontend, API, worker, infra, docs, or multiple repos. |
+| Install command | Gives Corvin the dependency setup command for each repo. |
+| Dev command | Gives Corvin the local startup command for each repo. |
+| Health check | Gives Corvin a URL to verify the repo is running locally. |
+| Global and per-repo env vars | Captures required values before local run. |
+| Local run notes | Makes seed data, optional services, flaky setup, and laptop-specific caveats visible. |
+
+PM contract:
+
+Corvin reads `exec.md`, packages the local run workflow, and runs the safe-mode command set from the UI. The PM should not manually clone repositories, switch branches, edit Compose files, or debug startup commands.
+
+## OpenAI Agent Orchestration
+
+All AI-based parts use OpenAI. Corvin should route work by difficulty instead of sending every step to the most expensive model.
+
+Recommended routing in this POC:
+
+| Stage | Agent | Model tier | Responsibility |
+| --- | --- | --- | --- |
+| Request triage | Router agent | `gpt-5.5` | Classify PM request, decide whether setup is ready, choose which agent path runs. |
+| Context collection | Context agent | `gpt-5.4-mini` | Summarize repo metadata, execution-packet fields, logs, files, and service status. |
+| Execution planning | Execution planner | `gpt-5.5` | Reason through multi-repo changes, branch contracts, deployment risk, and ambiguous product behavior. |
+| Mechanical subtasks | Worker agents | `gpt-5.4-mini` | Draft checklists, summarize diffs/logs, prepare preview notes, and handle low-risk subtasks. |
+| Verification | Verification agent | `gpt-5.5` | Check tests, screenshots, logs, preview output, and deployment readiness before promotion. |
+
+The router must be conservative. If the execution packet is incomplete, it should not improvise repository setup from PM text. It should ask for the engineering packet.
+
 ## Feasibility
 
 A narrow 5-hour POC is feasible.
 
 The full extended product is not feasible in 5 hours. The full version includes WhatsApp connection, GitHub/repository sync, multi-repo auth, secret management, automatic environment inference, real code handling, cloud runners, audit logs, and enterprise-grade sandboxing. Those are separate workstreams and should not be planned in this POC beyond accepting their eventual data.
 
-The 5-hour POC should prove the hardest product assumption: a PM can select a task and run a multi-repository product stack from one simple UI without manually understanding each repository.
+The 5-hour POC should prove the hardest product assumption: after engineering provides the execution packet, a PM can select a task and run a multi-repository product stack from one simple UI without manually understanding each repository.
 
 ## 5-Hour POC Scope
 
@@ -61,7 +100,9 @@ In scope:
 - Tailwind tokens based on `DESIGN.md`.
 - SaaS dashboard UI, not a marketing landing page.
 - Workspaces page with one seeded example workspace.
+- Engineering execution-packet readiness surface.
 - Setup instructions editor for engineering-authored workspace config.
+- OpenAI-only routing policy across router, context, planning, worker, and verification agents.
 - Docker Compose manifest preview.
 - Local runner API that can run a safe subset of commands.
 - WhatsApp webhook verification and message intake for the hackathon entry point.
@@ -77,7 +118,7 @@ Out of scope for the 5-hour POC:
 - Production GitHub OAuth token exchange, branch, merge, or push behavior.
 - Any plan for creating, pushing, reviewing, or merging code.
 - Real cloud agents.
-- Automatic discovery of arbitrary monorepo topology.
+- Automatic discovery of arbitrary monorepo topology without an engineering packet.
 - Strong isolation against malicious repositories.
 - Production secret vault.
 - Payments, billing, teams, RBAC.
@@ -119,7 +160,7 @@ Why Node.js: it keeps the POC in one TypeScript ecosystem and is fast enough for
 
 ### Workspace Blueprint
 
-Each customer/team can define a workspace blueprint. The blueprint is written by the engineering team, not by the PM.
+Each customer/team can define a workspace blueprint. The blueprint is written by the engineering team, not by the PM. Corvin agents may interpret and validate it, but they should not ask the PM to supply repository topology.
 
 Example shape:
 
@@ -131,10 +172,16 @@ repositories:
     sourceRef: synced-repo://acme/web
     defaultBranch: main
     path: repos/web
+    purpose: Customer checkout UI
+    startupCommand: pnpm install && pnpm dev
+    branchCoupling: Match api branch when checkout response schema changes
   - id: api
     sourceRef: synced-repo://acme/api
     defaultBranch: main
     path: repos/api
+    purpose: Checkout pricing and payment session API
+    startupCommand: pnpm install && pnpm dev
+    branchCoupling: Match frontend branch when API contract changes
 services:
   - id: web
     repository: frontend
@@ -164,11 +211,12 @@ Use Docker Compose heavily, but do not make the PM hand-author Compose files.
 
 Recommended behavior:
 
-1. Engineering team writes repository-specific setup instructions.
+1. Engineering team writes the execution packet and repository-specific setup instructions.
 2. Corvin stores the blueprint.
-3. Corvin generates a project-level Compose file that wires frontend, backend, database, queues, and supporting services together.
-4. Compose profiles allow optional services such as workers, seeders, or storybook.
-5. Health checks determine whether the PM can open a preview link.
+3. OpenAI-powered agents validate the packet, identify missing fields, and choose the correct execution route.
+4. Corvin generates a project-level Compose file that wires frontend, backend, database, queues, and supporting services together.
+5. Compose profiles allow optional services such as workers, seeders, or storybook.
+6. Health checks determine whether the PM can open a preview link.
 
 Local Docker gives enough isolation for a POC, but it is not equivalent to Stripe's devboxes. The POC should avoid destructive host operations, run allowlisted commands only, and treat untrusted repositories as risky.
 
@@ -182,14 +230,16 @@ Local Docker gives enough isolation for a POC, but it is not equivalent to Strip
 
 ### Configure
 
-- Engineering adds setup instructions.
-- Corvin validates the shape.
+- Engineering completes the execution packet.
+- If the packet is missing, Corvin blocks PM requests and shows the engineering form requirements.
+- Corvin agents validate the shape.
 - Corvin shows which repos and services are required.
 - PM sees only a simplified "Ready to run" view.
 
 ### Run
 
 - Corvin reads repository metadata and local paths from the external sync layer.
+- The OpenAI router selects the agent path based on task difficulty and workspace readiness.
 - Corvin generates Compose config.
 - Corvin runs Docker Compose.
 - Corvin streams logs.
@@ -198,7 +248,7 @@ Local Docker gives enough isolation for a POC, but it is not equivalent to Strip
 
 ### Change
 
-- PM describes the desired change.
+- PM describes the desired change only after setup is ready.
 - Corvin records the request with the running workspace context.
 - Code-edit, branch, push, and merge behavior is deferred until the synced repository implementation exists.
 
