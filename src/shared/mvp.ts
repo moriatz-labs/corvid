@@ -720,7 +720,8 @@ function inferHeadline(requestBody: string): string {
 }
 
 function extractMarkdownSection(markdown: string, heading: string): string {
-  const match = markdown.match(new RegExp(`## ${escapeRegExp(heading)}\\r?\\n([\\s\\S]*?)(?=\\r?\\n## |$)`, "i"));
+  const normalized = markdown.replace(/\r\n?/g, "\n");
+  const match = normalized.match(new RegExp(`## ${escapeRegExp(heading)}\\n([\\s\\S]*?)(?=\\n## |$)`, "i"));
   return match?.[1] ?? "";
 }
 

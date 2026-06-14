@@ -360,6 +360,39 @@ Missing essentials should block save.
     ]);
   });
 
+  it("parses exec.md fenced YAML blocks with Windows line endings", () => {
+    const markdown = renderExecMarkdown({
+      purpose: "Run checkout.",
+      repositories: [
+        {
+          id: "web",
+          repo: "acme/web",
+          role: "frontend",
+          install: "pnpm install",
+          dev: "pnpm dev",
+          health: "http://localhost:5173",
+        },
+      ],
+      environment: {
+        global: [
+          {
+            name: "DATABASE_URL",
+            required: true,
+            description: "Local Postgres connection string.",
+          },
+        ],
+        perRepo: {},
+      },
+      localRunNotes: "No notes.",
+    }).replace(/\n/g, "\r\n");
+
+    const parsed = parseExecMarkdown(markdown);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.document?.repositories[0].id).toBe("web");
+    expect(parsed.document?.environment.global[0].name).toBe("DATABASE_URL");
+  });
+
   it("blocks PM requests until exec.md is saved and valid", () => {
     const validation = validateBlueprint(blueprint, {
       dockerReady: true,

@@ -1,8 +1,6 @@
 import {
   FileText,
-  Github,
   Loader2,
-  MessageCircle,
   QrCode,
   X,
 } from "lucide-react";
@@ -678,7 +676,7 @@ function ExecSetupEditor({
               </label>
             </div>
           ) : (
-            <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 font-body text-sm text-red-700">
+            <div className="mt-4 rounded-md border border-[#E8C8C2] bg-[#F8E7E4] p-3 font-body text-sm text-[#A33A32]">
               Fix the Markdown preview so the structured YAML blocks can be parsed.
             </div>
           )}
@@ -749,16 +747,16 @@ function ValidationPanel({
           <p className="font-body text-sm text-muted-foreground">No blocking errors. Warnings can be fixed later.</p>
         ) : (
           errors.map((issue) => (
-            <div key={issue.id} className="rounded-md bg-red-50 p-3">
-              <p className="font-primary text-xs font-medium text-red-700">{issue.label}</p>
-              <p className="mt-1 font-body text-xs leading-relaxed text-red-700">{issue.detail}</p>
+            <div key={issue.id} className="rounded-md bg-[#F8E7E4] p-3">
+              <p className="font-primary text-xs font-medium text-[#A33A32]">{issue.label}</p>
+              <p className="mt-1 font-body text-xs leading-relaxed text-[#A33A32]">{issue.detail}</p>
             </div>
           ))
         )}
         {validation.warnings.map((issue) => (
-          <div key={issue.id} className="rounded-md bg-amber-50 p-3">
-            <p className="font-primary text-xs font-medium text-amber-700">{issue.label}</p>
-            <p className="mt-1 font-body text-xs leading-relaxed text-amber-700">{issue.detail}</p>
+          <div key={issue.id} className="rounded-md bg-[#F7ECE3] p-3">
+            <p className="font-primary text-xs font-medium text-[#A8663A]">{issue.label}</p>
+            <p className="mt-1 font-body text-xs leading-relaxed text-[#A8663A]">{issue.detail}</p>
           </div>
         ))}
       </div>
@@ -937,9 +935,14 @@ function SettingsSurface({
 
   return (
     <section className="grid gap-6">
+      <div className="flex justify-end">
+        <Button onClick={onOpenJob} disabled={!execReady}>
+          New request
+        </Button>
+      </div>
       <div className="grid gap-4 lg:grid-cols-3">
         <SettingsCard
-          icon={<FileText size={20} />}
+          icon={<FileText size={24} />}
           title="Execution"
           status={execReady ? "Ready" : "Required"}
           tone={execReady ? "success" : "warning"}
@@ -948,7 +951,7 @@ function SettingsSurface({
           onAction={onConfigureExec}
         />
         <SettingsCard
-          icon={<MessageCircle size={20} />}
+          icon={<BrandIcon name="whatsapp" label="WhatsApp" />}
           title="WhatsApp"
           status={whatsAppConnected ? "Connected" : "Not connected"}
           tone={whatsAppConnected ? "success" : "warning"}
@@ -957,7 +960,7 @@ function SettingsSurface({
           onAction={whatsAppConnected ? undefined : onWhatsApp}
         />
         <SettingsCard
-          icon={<Github size={20} />}
+          icon={<BrandIcon name="github" label="GitHub" />}
           title="GitHub"
           status={githubConnected ? "Connected" : "Not connected"}
           tone={githubConnected ? "success" : "warning"}
@@ -966,18 +969,6 @@ function SettingsSurface({
           onAction={githubConnected ? undefined : onGitHub}
         />
       </div>
-
-      <Card className="p-5">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <CardTitle>Do you want to start a job?</CardTitle>
-            <CardDescription>Create copy changes, product changes, and bug fixes from the job page.</CardDescription>
-          </div>
-          <Button onClick={onOpenJob} disabled={!execReady}>
-            Start a job
-          </Button>
-        </div>
-      </Card>
     </section>
   );
 }
@@ -1000,23 +991,32 @@ function SettingsCard({
   onAction?: () => void;
 }) {
   return (
-    <Card className="p-5">
+    <Card className="flex min-h-72 flex-col p-5">
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="grid size-11 place-items-center rounded-md bg-muted text-foreground">{icon}</div>
-          <div>
-            <h2 className="font-primary text-base font-medium">{title}</h2>
-            <p className="font-body text-xs text-muted-foreground">{detail}</p>
-          </div>
-        </div>
+        <div className="grid size-14 place-items-center rounded-md bg-muted text-foreground">{icon}</div>
         <Badge tone={tone}>{status}</Badge>
       </div>
+      <div className="mt-8">
+        <h2 className="font-primary text-xl font-medium">{title}</h2>
+        <p className="mt-3 max-w-sm font-body text-sm leading-relaxed text-muted-foreground">{detail}</p>
+      </div>
+      <div className="flex-1" />
       {onAction ? (
-        <Button className="mt-4 w-full" variant="secondary" onClick={onAction}>
+        <Button className="mt-6 w-full" variant="secondary" onClick={onAction}>
           {actionLabel}
         </Button>
       ) : null}
     </Card>
+  );
+}
+
+function BrandIcon({ name, label }: { name: "github" | "whatsapp"; label: string }) {
+  return (
+    <img
+      src={`/brand-icons/${name}.svg`}
+      alt={label}
+      className="size-7"
+    />
   );
 }
 
@@ -1198,9 +1198,9 @@ function JobSurface({
               ) : null}
             </div>
           ) : null}
-          <div className="max-h-96 overflow-auto rounded-md bg-muted p-4 font-mono text-xs leading-relaxed text-foreground">
+          <div className="max-h-96 overflow-auto rounded-md border border-[#2B2730] bg-[#111015] p-4 font-mono text-xs leading-relaxed text-[#D8F3DC] shadow-inner">
             {state.logs.map((line) => (
-              <p key={line}>{line}</p>
+              <p key={line} className="before:mr-2 before:text-[#8F6D83] before:content-['$']">{line}</p>
             ))}
           </div>
           {state.running ? (
@@ -1316,10 +1316,10 @@ function DeploymentPanel({
           </div>
         ) : null}
       </div>
-      <div className="mt-5 rounded-md bg-muted p-3">
-        <ul className="mt-2 grid gap-1 font-mono text-xs text-foreground">
+      <div className="mt-5 rounded-md border border-[#2B2730] bg-[#111015] p-3 shadow-inner">
+        <ul className="mt-2 grid gap-1 font-mono text-xs text-[#D8F3DC]">
           {deployment.auditTrail.slice(-3).map((item) => (
-            <li key={item}>{item}</li>
+            <li key={item} className="before:mr-2 before:text-[#8F6D83] before:content-['>']">{item}</li>
           ))}
         </ul>
       </div>
