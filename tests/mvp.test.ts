@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   buildGitHubAuthorizeUrl,
   buildExecRunPlan,
+  buildJobWorkspacePlan,
   buildWhatsAppConnect,
   canCapturePMRequest,
   createEmptyExecSetup,
   createDeploymentDemoState,
   createExecDraftFromBlueprint,
   createOpenAIChangePlan,
+  createWebRequest,
   createRequestFromWhatsAppMessage,
   parseExecMarkdown,
   promoteStagingToProduction,
@@ -129,6 +131,32 @@ describe("MVP core workflow", () => {
     expect(parsed.document?.localRunNotes).toContain("Seed data");
   });
 
+  it("parses exec.md files with Windows CRLF line endings", () => {
+    const markdown = renderExecMarkdown({
+      purpose: "Run checkout.",
+      repositories: [
+        {
+          id: "web",
+          repo: "acme/web",
+          role: "frontend",
+          install: "pnpm install",
+          dev: "pnpm dev",
+          health: "http://localhost:5173",
+        },
+      ],
+      environment: {
+        global: [],
+        perRepo: {},
+      },
+      localRunNotes: "No notes.",
+    }).replace(/\n/g, "\r\n");
+
+    const parsed = parseExecMarkdown(markdown);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.document?.repositories[0].repo).toBe("acme/web");
+  });
+
   it("blocks exec.md submission for missing essentials and invalid env names", () => {
     const parsed = parseExecMarkdown(`# exec.md
 
@@ -242,6 +270,69 @@ Missing essentials should block save.
     expect(result.plan?.commands).toEqual(["web: pnpm install && pnpm dev"]);
     expect(result.plan?.healthChecks).toEqual(["web: http://localhost:5173"]);
     expect(result.plan?.requiredEnv).toEqual(["DATABASE_URL"]);
+  });
+
+  it("builds a per-job clone and branch plan from exec.md repositories", () => {
+    const parsed = parseExecMarkdown(renderExecMarkdown({
+      purpose: "Run checkout.",
+      repositories: [
+        {
+          id: "web",
+          repo: "https://github.com/acme/web.git",
+          role: "frontend",
+          install: "pnpm install",
+          dev: "pnpm dev",
+          health: "http://localhost:5173",
+        },
+        {
+          id: "api",
+          repo: "acme/api",
+          role: "api",
+          install: "npm ci",
+          dev: "npm run dev",
+          health: "http://localhost:3000/health",
+        },
+      ],
+      environment: {
+        global: [],
+        perRepo: {},
+      },
+      localRunNotes: "No notes.",
+    }));
+    const request = createWebRequest({
+      title: "Fix checkout copy",
+      body: "Change checkout headline.",
+      requester: "pm@acme.local",
+      workspaceId: blueprint.id,
+    });
+
+    const plan = buildJobWorkspacePlan({
+      request: { ...request, id: "req_Checkout Copy!" },
+      document: parsed.document!,
+      workspaceRoot: "C:/tmp/corvin jobs",
+      createdAt: "2026-06-14T00:00:00.000Z",
+    });
+
+    expect(plan.id).toBe("job_req_checkout-copy");
+    expect(plan.branchName).toBe("corvin/req_checkout-copy");
+    expect(plan.rootPath).toBe("C:/tmp/corvin jobs/job_req_checkout-copy");
+    expect(plan.repositories).toEqual([
+      expect.objectContaining({
+        id: "web",
+        cloneUrl: "https://github.com/acme/web.git",
+        localPath: "C:/tmp/corvin jobs/job_req_checkout-copy/repos/web",
+        branchName: "corvin/req_checkout-copy",
+        installCommand: "pnpm install",
+        devCommand: "pnpm dev",
+        healthUrl: "http://localhost:5173",
+        status: "planned",
+      }),
+      expect.objectContaining({
+        id: "api",
+        cloneUrl: "https://github.com/acme/api.git",
+        localPath: "C:/tmp/corvin jobs/job_req_checkout-copy/repos/api",
+      }),
+    ]);
   });
 
   it("creates an editable exec.md draft from the current workspace blueprint", () => {

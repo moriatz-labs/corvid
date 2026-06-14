@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import "./env";
 import cors from "cors";
 import express from "express";
@@ -7,6 +8,7 @@ import QRCode from "qrcode";
 import {
   buildGitHubAuthorizeUrl,
   buildExecRunPlan,
+  buildJobWorkspacePlan,
   buildWhatsAppConnect,
   canCapturePMRequest,
   createOpenAIChangePlan,
@@ -22,7 +24,7 @@ import {
   validateBlueprint,
 } from "../src/shared/mvp";
 import { createInitialState } from "../src/shared/demo";
-import type { ExecDocument, ExecSetupState, MvpState, ServiceConfig, WorkspaceBlueprint } from "../src/shared/types";
+import type { ExecDocument, ExecSetupState, JobRunState, MvpState, ServiceConfig, WorkspaceBlueprint } from "../src/shared/types";
 import type { WhatsAppIntake } from "../src/shared/types";
 import {
   getWhatsAppSnapshot,
@@ -46,6 +48,7 @@ type GitHubConnection = {
   scopes: string[];
   connectedAt?: string;
   error?: string;
+  accessToken?: string;
 };
 
 const githubConnection: GitHubConnection = {
@@ -140,7 +143,14 @@ app.get("/api/integrations/github/authorize", (request, response) => {
 });
 
 app.get("/api/integrations/github/status", (_request, response) => {
-  response.json(githubConnection);
+  response.json({
+    connected: githubConnection.connected,
+    login: githubConnection.login,
+    name: githubConnection.name,
+    scopes: githubConnection.scopes,
+    connectedAt: githubConnection.connectedAt,
+    error: githubConnection.error,
+  });
 });
 
 app.get("/api/integrations/github/callback", async (request, response) => {
@@ -187,6 +197,7 @@ app.get("/api/integrations/github/callback", async (request, response) => {
     githubConnection.scopes = token.scopes;
     githubConnection.connectedAt = new Date().toISOString();
     githubConnection.error = undefined;
+    githubConnection.accessToken = token.accessToken;
 
     upsertIntegration("github", "connected", `Connected as ${profile.login}`);
     updateStep("github-sync", "succeeded");
@@ -289,13 +300,22 @@ app.post("/api/workspace/validate", (_request, response) => {
   response.json(state.validation);
 });
 
-app.post("/api/workspace/run", (_request, response) => {
+app.post("/api/workspace/run", async (_request, response) => {
   if (!state.exec.exists || !state.exec.validation.ready) {
     state.logs.unshift("[exec.md] local run blocked because exec.md is missing or invalid");
     response.status(409).json({
       error: "exec_md_required",
       message: "Create and validate exec.md before Corvin can package the local run workflow.",
       exec: state.exec,
+    });
+    return;
+  }
+
+  const pmRequest = state.requests[0];
+  if (!pmRequest) {
+    response.status(409).json({
+      error: "request_required",
+      message: "Start a job by capturing a PM request before Corvin clones repositories.",
     });
     return;
   }
@@ -330,7 +350,33 @@ app.post("/api/workspace/run", (_request, response) => {
     return;
   }
 
+  const gitHubToken = getGitHubCloneToken();
+  if (!gitHubToken) {
+    const blockedJob = createBlockedJob(pmRequest, parsed.document, "Connect GitHub or set GITHUB_TOKEN before cloning repositories.");
+    state.jobs.unshift(blockedJob);
+    state.logs.unshift("[job] repository clone blocked because GitHub credentials are missing");
+    response.status(409).json({
+      error: "github_token_required",
+      message: "Connect GitHub or set GITHUB_TOKEN before cloning repositories.",
+      job: blockedJob,
+    });
+    return;
+  }
+
+  const job = createPlannedJob(pmRequest, parsed.document);
+  state.jobs.unshift(job);
   state.running = true;
+  try {
+    await cloneJobRepositories(job, gitHubToken);
+  } catch (error) {
+    state.running = false;
+    response.status(502).json({
+      error: "repository_clone_failed",
+      message: error instanceof Error ? redactToken(error.message, gitHubToken) : "Repository clone failed.",
+      job,
+    });
+    return;
+  }
   state.compose = generateComposeFile(state.workspace);
   state.workspace.services = state.workspace.services.map((service) => ({
     ...service,
@@ -349,11 +395,11 @@ app.post("/api/workspace/run", (_request, response) => {
     ...state.exec,
     runPlan: runPlan.plan,
   };
-  state.logs.unshift(`[runner] packaged ${runPlan.plan.commands.length} exec.md commands in safe mode`);
+  state.logs.unshift(`[runner] prepared ${runPlan.plan.commands.length} exec.md commands for ${job.id}`);
   for (const command of runPlan.plan.commands.slice().reverse()) {
     state.logs.unshift(`[exec.md] ${command}`);
   }
-  state.logs.unshift("[health] web and api services are healthy");
+  state.logs.unshift(`[job] ${job.id} repository branches are ready`);
   response.json(state);
 });
 
@@ -562,6 +608,122 @@ function renderOAuthResult(title: string, message: string) {
     "</body>",
     "</html>",
   ].join("");
+}
+
+function getGitHubCloneToken() {
+  return githubConnection.accessToken ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+}
+
+function createPlannedJob(request: MvpState["requests"][number], document: ExecDocument): JobRunState {
+  const now = new Date().toISOString();
+  const plan = buildJobWorkspacePlan({
+    request,
+    document,
+    workspaceRoot: ".corvin/jobs",
+    createdAt: now,
+  });
+
+  return {
+    id: plan.id,
+    requestId: request.id,
+    status: "planned",
+    currentAction: "Planning repository workspace",
+    plan,
+    logs: [`[job] planned ${plan.repositories.length} repositories for ${request.id}`],
+    startedAt: now,
+    updatedAt: now,
+  };
+}
+
+function createBlockedJob(request: MvpState["requests"][number], document: ExecDocument, reason: string): JobRunState {
+  const job = createPlannedJob(request, document);
+  const now = new Date().toISOString();
+  return {
+    ...job,
+    status: "blocked",
+    currentAction: "Waiting for GitHub credentials",
+    logs: [reason, ...job.logs],
+    updatedAt: now,
+  };
+}
+
+async function cloneJobRepositories(job: JobRunState, token: string) {
+  job.status = "cloning";
+  job.currentAction = "Cloning repositories";
+  job.updatedAt = new Date().toISOString();
+  job.logs.unshift(`[job] cloning repositories into ${job.plan.rootPath}`);
+  state.logs.unshift(`[job] cloning repositories for ${job.id}`);
+  mkdirSync(job.plan.rootPath, { recursive: true });
+
+  for (const repository of job.plan.repositories) {
+    repository.status = "cloning";
+    job.logs.unshift(`[git] cloning ${repository.repo}`);
+    state.logs.unshift(`[git] cloning ${repository.repo}`);
+    mkdirSync(new URL(`../${repository.localPath.replace(/\\/g, "/")}`, import.meta.url), { recursive: true });
+
+    try {
+      if (!existsSync(new URL(`../${repository.localPath.replace(/\\/g, "/")}/.git`, import.meta.url))) {
+        await runGit(["clone", "--depth", "1", withGitHubToken(repository.cloneUrl, token), repository.localPath]);
+      }
+      repository.status = "cloned";
+      await runGit(["checkout", "-B", repository.branchName], repository.localPath);
+      repository.status = "branch-ready";
+      job.logs.unshift(`[git] ${repository.repo} ready on ${repository.branchName}`);
+    } catch (error) {
+      repository.status = "failed";
+      repository.lastError = error instanceof Error ? redactToken(error.message, token) : "Git command failed";
+      job.status = "failed";
+      job.currentAction = `Clone failed for ${repository.repo}`;
+      job.logs.unshift(`[git] ${repository.repo} failed: ${repository.lastError}`);
+      state.logs.unshift(`[git] ${repository.repo} failed: ${repository.lastError}`);
+      job.updatedAt = new Date().toISOString();
+      throw error;
+    }
+  }
+
+  job.status = "branch-ready";
+  job.currentAction = "Repository branches ready";
+  job.updatedAt = new Date().toISOString();
+}
+
+async function runGit(args: string[], cwd = ".") {
+  const result = await runCommand("git", args, cwd);
+  if (result.exitCode !== 0) {
+    throw new Error(result.output || `git ${args[0]} failed`);
+  }
+  return result.output;
+}
+
+function runCommand(command: string, args: string[], cwd: string) {
+  return new Promise<{ exitCode: number; output: string }>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      shell: false,
+      windowsHide: true,
+    });
+    const output: string[] = [];
+
+    child.stdout.on("data", (chunk) => output.push(String(chunk)));
+    child.stderr.on("data", (chunk) => output.push(String(chunk)));
+    child.on("error", reject);
+    child.on("close", (exitCode) => {
+      resolve({
+        exitCode: exitCode ?? 1,
+        output: output.join("").trim(),
+      });
+    });
+  });
+}
+
+function withGitHubToken(cloneUrl: string, token: string) {
+  const url = new URL(cloneUrl);
+  url.username = "x-access-token";
+  url.password = token;
+  return url.toString();
+}
+
+function redactToken(value: string, token: string) {
+  return value.replaceAll(token, "[redacted]");
 }
 
 function escapeHtml(value: string) {

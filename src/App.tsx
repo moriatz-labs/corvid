@@ -729,6 +729,7 @@ type CurrentAction = {
 function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revision"): CurrentAction {
   const execReady = state.exec.exists && state.exec.validation.ready;
   const latestRequest = state.requests[0];
+  const latestJob = state.jobs[0];
   const stagingReady = state.deployment.staging.status === "ready";
   const productionAccepted =
     stagingReady &&
@@ -747,6 +748,34 @@ function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revis
       label: "Waiting for job",
       detail: "Start a job to request a copy change, product change, or bug fix.",
       tone: "neutral",
+    };
+  }
+  if (latestJob?.status === "blocked") {
+    return {
+      label: latestJob.currentAction,
+      detail: latestJob.logs[0] ?? "This job is blocked until setup is complete.",
+      tone: "warning",
+    };
+  }
+  if (latestJob?.status === "failed") {
+    return {
+      label: latestJob.currentAction,
+      detail: latestJob.logs[0] ?? "This job failed while preparing the workspace.",
+      tone: "danger",
+    };
+  }
+  if (latestJob?.status === "cloning") {
+    return {
+      label: "Getting repository",
+      detail: latestJob.currentAction,
+      tone: "info",
+    };
+  }
+  if (latestJob?.status === "branch-ready") {
+    return {
+      label: "Repository ready",
+      detail: `${latestJob.plan.repositories.length} repositories are cloned on ${latestJob.plan.branchName}.`,
+      tone: "success",
     };
   }
   if (!state.running) {
@@ -956,6 +985,7 @@ function JobSurface({
   onDemote: () => void;
   onStop: () => void;
 }) {
+  const latestJob = state.jobs[0];
   return (
     <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div className="grid gap-6">
@@ -998,6 +1028,30 @@ function JobSurface({
             <p className="font-primary text-sm font-medium">{action.label}</p>
             <p className="mt-1 font-body text-xs leading-relaxed text-muted-foreground">{action.detail}</p>
           </div>
+          {latestJob ? (
+            <div className="mb-4 rounded-md border border-border bg-background p-3">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <p className="font-primary text-sm font-medium">Workspace</p>
+                <Badge tone={latestJob.status === "failed" ? "danger" : latestJob.status === "blocked" ? "warning" : "info"}>
+                  {latestJob.status}
+                </Badge>
+              </div>
+              <p className="break-all font-mono text-xs text-muted-foreground">{latestJob.plan.branchName}</p>
+              <div className="mt-3 grid gap-2">
+                {latestJob.plan.repositories.map((repository) => (
+                  <div key={repository.id} className="rounded-md bg-muted p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-primary text-xs font-medium">{repository.id}</p>
+                      <Badge tone={repository.status === "failed" ? "danger" : repository.status === "branch-ready" ? "success" : "neutral"}>
+                        {repository.status}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{repository.localPath}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="max-h-96 overflow-auto rounded-md bg-muted p-4 font-mono text-xs leading-relaxed text-foreground">
             {state.logs.map((line) => (
               <p key={line}>{line}</p>

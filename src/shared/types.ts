@@ -108,6 +108,64 @@ export type ExecSetupState = {
   runPlan?: ExecRunPlan;
 };
 
+export type JobRepositoryStatus =
+  | "planned"
+  | "cloning"
+  | "cloned"
+  | "branch-ready"
+  | "installing"
+  | "starting"
+  | "healthy"
+  | "failed";
+
+export type JobRepositoryWorkspace = {
+  id: string;
+  repo: string;
+  cloneUrl: string;
+  localPath: string;
+  branchName: string;
+  installCommand: string;
+  devCommand: string;
+  healthUrl: string;
+  status: JobRepositoryStatus;
+  lastError?: string;
+};
+
+export type JobWorkspacePlan = {
+  id: string;
+  requestId: string;
+  rootPath: string;
+  branchName: string;
+  repositories: JobRepositoryWorkspace[];
+  createdAt: string;
+};
+
+export type JobRunStatus =
+  | "planned"
+  | "blocked"
+  | "cloning"
+  | "branch-ready"
+  | "running"
+  | "healthy"
+  | "waiting-for-approval"
+  | "waiting-for-changes"
+  | "pr-open"
+  | "merged"
+  | "failed";
+
+export type JobRunState = {
+  id: string;
+  requestId: string;
+  status: JobRunStatus;
+  currentAction: string;
+  plan: JobWorkspacePlan;
+  logs: string[];
+  startedAt: string;
+  updatedAt: string;
+  pullRequestUrl?: string;
+  finalUrl?: string;
+};
+
 export type EngineeringIntakeItem = {
   id: string;
   label: string;
@@ -187,6 +245,7 @@ export type MvpState = {
   steps: BlueprintStep[];
   logs: string[];
   requests: PMRequest[];
+  jobs: JobRunState[];
   running: boolean;
   openAI: OpenAIStatus;
   deployment: DeploymentDemoState;

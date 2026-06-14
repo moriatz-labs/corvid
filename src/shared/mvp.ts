@@ -9,6 +9,7 @@ import type {
   ExecValidationIssue,
   ExecValidationResult,
   GithubOAuthConfig,
+  JobWorkspacePlan,
   PMRequest,
   DeploymentDemoState,
   OpenAIChangePlan,
@@ -237,6 +238,36 @@ export function buildExecRunPlan(document: ExecDocument, env: Record<string, str
         .filter((variable) => variable.required)
         .map((variable) => variable.name),
     },
+  };
+}
+
+export function buildJobWorkspacePlan(input: {
+  request: PMRequest;
+  document: ExecDocument;
+  workspaceRoot: string;
+  createdAt?: string;
+}): JobWorkspacePlan {
+  const jobId = `job_${sanitizeIdentifier(input.request.id)}`;
+  const branchName = `corvin/${sanitizeIdentifier(input.request.id)}`;
+  const rootPath = joinPath(input.workspaceRoot, jobId);
+
+  return {
+    id: jobId,
+    requestId: input.request.id,
+    rootPath,
+    branchName,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    repositories: input.document.repositories.map((repository) => ({
+      id: repository.id,
+      repo: repository.repo,
+      cloneUrl: normalizeGitHubCloneUrl(repository.repo),
+      localPath: joinPath(rootPath, "repos", repository.id),
+      branchName,
+      installCommand: repository.install,
+      devCommand: repository.dev,
+      healthUrl: repository.health,
+      status: "planned",
+    })),
   };
 }
 
@@ -622,6 +653,33 @@ function stableId(input: string): string {
   return Math.abs(hash).toString(36);
 }
 
+function normalizeGitHubCloneUrl(repo: string) {
+  const trimmed = repo.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+  return `https://github.com/${trimmed}.git`;
+}
+
+function sanitizeIdentifier(value: string) {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "job"
+  );
+}
+
+function joinPath(...parts: string[]) {
+  return parts
+    .filter(Boolean)
+    .map((part, index) => {
+      const normalized = part.replace(/\\/g, "/");
+      if (index === 0) return normalized.replace(/\/+$/g, "");
+      return normalized.replace(/^\/+|\/+$/g, "");
+    })
+    .join("/");
+}
+
 function inferHeadline(requestBody: string): string {
   const lower = requestBody.toLowerCase();
   if (lower.includes("charge") || lower.includes("confus")) {
@@ -634,7 +692,7 @@ function inferHeadline(requestBody: string): string {
 }
 
 function extractMarkdownSection(markdown: string, heading: string): string {
-  const match = markdown.match(new RegExp(`## ${escapeRegExp(heading)}\\n([\\s\\S]*?)(?=\\n## |$)`, "i"));
+  const match = markdown.match(new RegExp(`## ${escapeRegExp(heading)}\\r?\\n([\\s\\S]*?)(?=\\r?\\n## |$)`, "i"));
   return match?.[1] ?? "";
 }
 
