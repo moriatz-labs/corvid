@@ -984,7 +984,6 @@ function JobSurface({
           onDemote={onDemote}
           reviewDecision={reviewDecision}
         />
-        <OpenAIPanel state={state} loading={loading === "openai"} onGenerate={onGeneratePlan} />
       </div>
       <aside className="grid content-start gap-6">
         <Card>
@@ -1047,58 +1046,6 @@ function JobControls({
         <Button onClick={onStage} disabled={!hasRequest || loading !== null}>
           {loading === "staging" ? "Showing locally..." : "Show locally"}
         </Button>
-      </div>
-    </Card>
-  );
-}
-
-function OpenAIPanel({
-  state,
-  loading,
-  onGenerate,
-}: {
-  state: MvpState;
-  loading: boolean;
-  onGenerate: () => void;
-}) {
-  const plan = state.openAI.lastPlan;
-  return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>OpenAI change plan</CardTitle>
-          <CardDescription>Generate the implementation plan after the workspace is runnable.</CardDescription>
-        </div>
-        <Badge tone={state.openAI.configured ? "success" : "warning"}>
-          {state.openAI.configured ? state.openAI.model : "Demo mode"}
-        </Badge>
-      </CardHeader>
-      <div className="grid gap-4 lg:grid-cols-[0.7fr_1.3fr]">
-        <div className="rounded-md border border-border bg-background p-4">
-          <p className="font-primary text-sm font-medium">Planner</p>
-          <p className="mt-2 font-body text-sm text-muted-foreground">
-            {state.openAI.provider} routes this request through {state.openAI.model}.
-          </p>
-          <Button className="mt-4 w-full" onClick={onGenerate} disabled={loading}>
-            {loading ? "Planning..." : "Generate plan"}
-          </Button>
-        </div>
-        <div className="rounded-md border border-border bg-background p-4">
-          <p className="font-primary text-sm font-medium">{plan?.summary ?? "No plan generated yet."}</p>
-          {plan?.recommendedHeadline ? (
-            <p className="mt-3 rounded-md bg-muted p-3 font-body text-sm">{plan.recommendedHeadline}</p>
-          ) : null}
-          {plan?.steps?.length ? (
-            <ol className="mt-4 grid gap-2">
-              {plan.steps.slice(0, 3).map((step, index) => (
-                <li key={step} className="flex gap-2 font-body text-sm text-muted-foreground">
-                  <span className="font-mono text-foreground">{index + 1}.</span>
-                  {step}
-                </li>
-              ))}
-            </ol>
-          ) : null}
-        </div>
       </div>
     </Card>
   );
