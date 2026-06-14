@@ -108,6 +108,115 @@ export type ExecSetupState = {
   runPlan?: ExecRunPlan;
 };
 
+export type JobRepositoryStatus =
+  | "planned"
+  | "cloning"
+  | "cloned"
+  | "branch-ready"
+  | "installing"
+  | "starting"
+  | "healthy"
+  | "failed";
+
+export type JobRepositoryWorkspace = {
+  id: string;
+  repo: string;
+  cloneUrl: string;
+  localPath: string;
+  branchName: string;
+  installCommand: string;
+  devCommand: string;
+  healthUrl: string;
+  status: JobRepositoryStatus;
+  devProcessId?: number;
+  lastError?: string;
+};
+
+export type JobWorkspacePlan = {
+  id: string;
+  requestId: string;
+  rootPath: string;
+  branchName: string;
+  repositories: JobRepositoryWorkspace[];
+  createdAt: string;
+};
+
+export type JobChangedFile = {
+  repositoryId: string;
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "unknown";
+};
+
+export type JobPullRequest = {
+  repositoryId: string;
+  repo: string;
+  url: string;
+  number: number;
+  status: "open";
+};
+
+export type JobFileEditPlan = {
+  targetFileHints: string[];
+  replacementText: string;
+  fallbackFile: string;
+  summary: string;
+};
+
+export type JobScreenshotArtifact = {
+  label: string;
+  url: string;
+  path: string;
+  capturedAt: string;
+  status: "captured" | "failed";
+  error?: string;
+};
+
+export type JobReviewPackage = {
+  wrong: string;
+  fixed: string;
+  revised: string;
+  screenshots: JobScreenshotArtifact[];
+  updatedAt: string;
+};
+
+export type JobReviewIteration = {
+  id: string;
+  model: string;
+  mode: "live" | "fallback";
+  feedback: string;
+  summary: string;
+  targetFile?: string;
+  createdAt: string;
+};
+
+export type JobRunStatus =
+  | "planned"
+  | "blocked"
+  | "cloning"
+  | "branch-ready"
+  | "running"
+  | "healthy"
+  | "waiting-for-approval"
+  | "waiting-for-changes"
+  | "pr-open"
+  | "failed";
+
+export type JobRunState = {
+  id: string;
+  requestId: string;
+  status: JobRunStatus;
+  currentAction: string;
+  plan: JobWorkspacePlan;
+  logs: string[];
+  changedFiles: JobChangedFile[];
+  diff?: string;
+  pullRequests: JobPullRequest[];
+  reviewIterations: JobReviewIteration[];
+  reviewPackage?: JobReviewPackage;
+  startedAt: string;
+  updatedAt: string;
+};
+
 export type EngineeringIntakeItem = {
   id: string;
   label: string;
@@ -187,6 +296,7 @@ export type MvpState = {
   steps: BlueprintStep[];
   logs: string[];
   requests: PMRequest[];
+  jobs: JobRunState[];
   running: boolean;
   openAI: OpenAIStatus;
   deployment: DeploymentDemoState;

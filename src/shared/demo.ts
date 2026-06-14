@@ -256,6 +256,7 @@ export function createInitialState(): MvpState {
         demoBlueprint,
       ),
     ],
+    jobs: [],
     running: false,
     openAI: {
       provider: "OpenAI",

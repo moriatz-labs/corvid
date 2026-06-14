@@ -9,6 +9,8 @@ import type {
   ExecValidationIssue,
   ExecValidationResult,
   GithubOAuthConfig,
+  JobFileEditPlan,
+  JobWorkspacePlan,
   PMRequest,
   DeploymentDemoState,
   OpenAIChangePlan,
@@ -237,6 +239,36 @@ export function buildExecRunPlan(document: ExecDocument, env: Record<string, str
         .filter((variable) => variable.required)
         .map((variable) => variable.name),
     },
+  };
+}
+
+export function buildJobWorkspacePlan(input: {
+  request: PMRequest;
+  document: ExecDocument;
+  workspaceRoot: string;
+  createdAt?: string;
+}): JobWorkspacePlan {
+  const jobId = `job_${sanitizeIdentifier(input.request.id)}`;
+  const branchName = `corvin/${sanitizeIdentifier(input.request.id)}`;
+  const rootPath = joinPath(input.workspaceRoot, jobId);
+
+  return {
+    id: jobId,
+    requestId: input.request.id,
+    rootPath,
+    branchName,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    repositories: input.document.repositories.map((repository) => ({
+      id: repository.id,
+      repo: repository.repo,
+      cloneUrl: normalizeGitHubCloneUrl(repository.repo),
+      localPath: joinPath(rootPath, "repos", repository.id),
+      branchName,
+      installCommand: repository.install,
+      devCommand: repository.dev,
+      healthUrl: repository.health,
+      status: "planned",
+    })),
   };
 }
 
@@ -477,6 +509,33 @@ export function createOpenAIChangePlan(input: {
   };
 }
 
+export function createJobFileEditPlan(requestBody: string): JobFileEditPlan {
+  const replacementText = inferHeadline(requestBody);
+  const lower = requestBody.toLowerCase();
+  const targetFileHints = [
+    "src/App.tsx",
+    "src/App.jsx",
+    "src/app/page.tsx",
+    "app/page.tsx",
+    "pages/index.tsx",
+    "pages/index.jsx",
+    "src/pages/index.tsx",
+    "src/components/Checkout.tsx",
+    "src/components/Checkout.jsx",
+  ];
+
+  if (lower.includes("api") || lower.includes("bug")) {
+    targetFileHints.push("src/server.ts", "src/index.ts", "server/index.ts", "api/index.ts");
+  }
+
+  return {
+    targetFileHints,
+    replacementText,
+    fallbackFile: "CORVIN_CHANGE_REQUEST.md",
+    summary: `Apply requested change with visible copy: ${replacementText}`,
+  };
+}
+
 export function createOpenAIRoutingPlan(): OpenAIRoute[] {
   return [
     {
@@ -620,6 +679,33 @@ function stableId(input: string): string {
     hash |= 0;
   }
   return Math.abs(hash).toString(36);
+}
+
+function normalizeGitHubCloneUrl(repo: string) {
+  const trimmed = repo.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+  return `https://github.com/${trimmed}.git`;
+}
+
+function sanitizeIdentifier(value: string) {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "job"
+  );
+}
+
+function joinPath(...parts: string[]) {
+  return parts
+    .filter(Boolean)
+    .map((part, index) => {
+      const normalized = part.replace(/\\/g, "/");
+      if (index === 0) return normalized.replace(/\/+$/g, "");
+      return normalized.replace(/^\/+|\/+$/g, "");
+    })
+    .join("/");
 }
 
 function inferHeadline(requestBody: string): string {

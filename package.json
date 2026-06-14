@@ -21,6 +21,7 @@
     "framer-motion": "^12.23.26",
     "lucide-react": "^0.562.0",
     "openai": "^6.11.0",
+    "playwright": "^1.60.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",

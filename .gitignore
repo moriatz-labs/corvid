@@ -3,3 +3,5 @@ dist/
 .env
 *.log
 .corvin-whatsapp-auth/
+.corvin/jobs/
+.corvin/github-auth.json

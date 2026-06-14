@@ -2,7 +2,6 @@ import {
   FileText,
   Loader2,
   QrCode,
-  Rocket,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -212,13 +211,59 @@ export default function App() {
     setReviewDecision("idle");
   }
 
-  async function deployProduction() {
+  async function applyJobChange() {
+    const job = state.jobs[0];
+    if (!job) return;
     await runAction(
-      "production",
-      () => api<DeploymentDemoState>("/api/deploy/production", { method: "POST" }),
-      (deployment) => setState((current) => ({ ...current, deployment })),
+      "apply-change",
+      () =>
+        api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/apply-change`, {
+          method: "POST",
+          body: JSON.stringify({ feedback: reviewDecision === "needs-revision" ? "Apply requested review changes." : "" }),
+        }),
+      (nextJob) =>
+        setState((current) => ({
+          ...current,
+          jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
+        })),
     );
-    setReviewDecision("idle");
+  }
+
+  async function createJobPullRequest() {
+    const job = state.jobs[0];
+    if (!job) return;
+    await runAction(
+      "create-pr",
+      () => api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/pull-request`, { method: "POST" }),
+      (nextJob) =>
+        setState((current) => ({
+          ...current,
+          jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
+        })),
+    );
+  }
+
+  async function requestJobChanges() {
+    const job = state.jobs[0];
+    if (!job) {
+      setReviewDecision("needs-revision");
+      return;
+    }
+    await runAction(
+      "request-changes",
+      () =>
+        api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/request-changes`, {
+          method: "POST",
+          body: JSON.stringify({ feedback: "PM sent the review back for changes." }),
+        }),
+      (nextJob) => {
+        setReviewDecision("needs-revision");
+        setState((current) => ({
+          ...current,
+          jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
+        }));
+      },
+    );
   }
 
   async function validateExecMarkdown() {
@@ -330,9 +375,10 @@ export default function App() {
             onSubmit={() => void submitRequest()}
             onPrepareContext={() => void runWorkspace()}
             onGeneratePlan={() => void generateOpenAIPlan()}
+            onApplyChange={() => void applyJobChange()}
+            onCreatePullRequest={() => void createJobPullRequest()}
             onStage={() => void deployStaging()}
-            onProduction={() => void deployProduction()}
-            onDemote={() => setReviewDecision("needs-revision")}
+            onDemote={() => void requestJobChanges()}
             onStop={() => void stopWorkspace(false)}
           />
         )}
@@ -727,11 +773,8 @@ type CurrentAction = {
 function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revision"): CurrentAction {
   const execReady = state.exec.exists && state.exec.validation.ready;
   const latestRequest = state.requests[0];
+  const latestJob = state.jobs[0];
   const stagingReady = state.deployment.staging.status === "ready";
-  const productionAccepted =
-    stagingReady &&
-    state.deployment.production.status === "live" &&
-    state.deployment.production.headline === state.deployment.staging.headline;
 
   if (!execReady) {
     return {
@@ -745,6 +788,62 @@ function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revis
       label: "Waiting for job",
       detail: "Start a job to request a copy change, product change, or bug fix.",
       tone: "neutral",
+    };
+  }
+  if (latestJob?.status === "blocked") {
+    return {
+      label: latestJob.currentAction,
+      detail: latestJob.logs[0] ?? "This job is blocked until setup is complete.",
+      tone: "warning",
+    };
+  }
+  if (latestJob?.status === "failed") {
+    return {
+      label: latestJob.currentAction,
+      detail: latestJob.logs[0] ?? "This job failed while preparing the workspace.",
+      tone: "danger",
+    };
+  }
+  if (latestJob?.status === "cloning") {
+    return {
+      label: "Getting repository",
+      detail: latestJob.currentAction,
+      tone: "info",
+    };
+  }
+  if (latestJob?.status === "branch-ready") {
+    return {
+      label: "Repository ready",
+      detail: `${latestJob.plan.repositories.length} repositories are cloned on ${latestJob.plan.branchName}.`,
+      tone: "success",
+    };
+  }
+  if (latestJob?.status === "healthy") {
+    return {
+      label: "Showing it locally",
+      detail: "Localhost services are healthy and ready for changes.",
+      tone: "success",
+    };
+  }
+  if (latestJob?.status === "waiting-for-approval") {
+    return {
+      label: "Waiting for approval",
+      detail: `${latestJob.changedFiles.length} changed files are ready for review.`,
+      tone: "warning",
+    };
+  }
+  if (latestJob?.status === "waiting-for-changes") {
+    return {
+      label: "Waiting for changes",
+      detail: latestJob.logs[0] ?? "Review feedback is ready for the next change iteration.",
+      tone: "warning",
+    };
+  }
+  if (latestJob?.status === "pr-open") {
+    return {
+      label: "Pull request open",
+      detail: latestJob.pullRequests[0]?.url ?? "Review the opened pull request.",
+      tone: "info",
     };
   }
   if (!state.running) {
@@ -768,10 +867,10 @@ function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revis
       tone: "warning",
     };
   }
-  if (!productionAccepted) {
+  if (stagingReady) {
     return {
       label: "Waiting for approval",
-      detail: "A preview is ready. Accept it or send it back from this job.",
+      detail: "A local preview is ready. Create a PR for engineering review or send it back for changes.",
       tone: "warning",
     };
   }
@@ -934,8 +1033,9 @@ function JobSurface({
   onSubmit,
   onPrepareContext,
   onGeneratePlan,
+  onApplyChange,
+  onCreatePullRequest,
   onStage,
-  onProduction,
   onDemote,
   onStop,
 }: {
@@ -951,11 +1051,13 @@ function JobSurface({
   onSubmit: () => void;
   onPrepareContext: () => void;
   onGeneratePlan: () => void;
+  onApplyChange: () => void;
+  onCreatePullRequest: () => void;
   onStage: () => void;
-  onProduction: () => void;
   onDemote: () => void;
   onStop: () => void;
 }) {
+  const latestJob = state.jobs[0];
   return (
     <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div className="grid gap-6">
@@ -974,13 +1076,14 @@ function JobSurface({
           loading={loading}
           onPrepareContext={onPrepareContext}
           onGeneratePlan={onGeneratePlan}
+          onApplyChange={onApplyChange}
+          onCreatePullRequest={onCreatePullRequest}
           onStage={onStage}
         />
         <DeploymentPanel
           deployment={state.deployment}
           loading={loading}
           onStage={onStage}
-          onProduction={onProduction}
           onDemote={onDemote}
           reviewDecision={reviewDecision}
         />
@@ -998,6 +1101,103 @@ function JobSurface({
             <p className="font-primary text-sm font-medium">{action.label}</p>
             <p className="mt-1 font-body text-xs leading-relaxed text-muted-foreground">{action.detail}</p>
           </div>
+          {latestJob ? (
+            <div className="mb-4 rounded-md border border-border bg-background p-3">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <p className="font-primary text-sm font-medium">Workspace</p>
+                <Badge tone={latestJob.status === "failed" ? "danger" : latestJob.status === "blocked" ? "warning" : "info"}>
+                  {latestJob.status}
+                </Badge>
+              </div>
+              <p className="break-all font-mono text-xs text-muted-foreground">{latestJob.plan.branchName}</p>
+              <div className="mt-3 grid gap-2">
+                {latestJob.plan.repositories.map((repository) => (
+                  <div key={repository.id} className="rounded-md bg-muted p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-primary text-xs font-medium">{repository.id}</p>
+                      <Badge tone={repository.status === "failed" ? "danger" : repository.status === "branch-ready" ? "success" : "neutral"}>
+                        {repository.status}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{repository.localPath}</p>
+                  </div>
+                ))}
+              </div>
+              {latestJob.changedFiles.length > 0 ? (
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="font-primary text-xs font-medium">Changed files</p>
+                  <div className="mt-2 grid gap-1">
+                    {latestJob.changedFiles.slice(0, 6).map((file) => (
+                      <p key={`${file.repositoryId}-${file.path}`} className="break-all font-mono text-[11px] text-muted-foreground">
+                        {file.repositoryId}: {file.status} {file.path}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {latestJob.reviewPackage ? (
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="font-primary text-xs font-medium">Engineering review summary</p>
+                  <div className="mt-2 grid gap-2 font-body text-xs text-muted-foreground">
+                    <p><span className="text-foreground">Wrong:</span> {latestJob.reviewPackage.wrong}</p>
+                    <p><span className="text-foreground">Fixed:</span> {latestJob.reviewPackage.fixed}</p>
+                    <p><span className="text-foreground">Revised:</span> {latestJob.reviewPackage.revised}</p>
+                  </div>
+                  {latestJob.reviewPackage.screenshots.length > 0 ? (
+                    <div className="mt-2 grid gap-1">
+                      {latestJob.reviewPackage.screenshots.map((screenshot) => (
+                        <a
+                          key={`${screenshot.label}-${screenshot.capturedAt}`}
+                          className="break-all font-mono text-[11px] text-foreground underline"
+                          href={screenshot.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {screenshot.status}: {screenshot.label}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
+                  {latestJob.reviewIterations.length > 0 ? (
+                    <div className="mt-3 rounded-md bg-muted p-2">
+                      <p className="font-primary text-xs font-medium text-foreground">GPT review loop</p>
+                      <div className="mt-2 grid gap-2">
+                        {latestJob.reviewIterations.slice(0, 3).map((iteration) => (
+                          <div key={iteration.id} className="font-body text-xs text-muted-foreground">
+                            <p>
+                              <span className="text-foreground">{iteration.mode}</span> {iteration.model}
+                            </p>
+                            <p>{iteration.summary}</p>
+                            {iteration.targetFile ? (
+                              <p className="break-all font-mono text-[11px]">{iteration.targetFile}</p>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {latestJob.pullRequests.length > 0 ? (
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="font-primary text-xs font-medium">Pull requests</p>
+                  <div className="mt-2 grid gap-1">
+                    {latestJob.pullRequests.map((pullRequest) => (
+                      <a
+                        key={pullRequest.url}
+                        className="break-all font-mono text-[11px] text-foreground underline"
+                        href={pullRequest.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {pullRequest.repo}#{pullRequest.number}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="max-h-96 overflow-auto rounded-md border border-[#2B2730] bg-[#111015] p-4 font-mono text-xs leading-relaxed text-[#D8F3DC] shadow-inner">
             {state.logs.map((line) => (
               <p key={line} className="before:mr-2 before:text-[#8F6D83] before:content-['$']">{line}</p>
@@ -1019,15 +1219,22 @@ function JobControls({
   loading,
   onPrepareContext,
   onGeneratePlan,
+  onApplyChange,
+  onCreatePullRequest,
   onStage,
 }: {
   state: MvpState;
   loading: string | null;
   onPrepareContext: () => void;
   onGeneratePlan: () => void;
+  onApplyChange: () => void;
+  onCreatePullRequest: () => void;
   onStage: () => void;
 }) {
   const hasRequest = state.requests.length > 0;
+  const latestJob = state.jobs[0];
+  const canApplyChange = Boolean(latestJob && ["healthy", "branch-ready", "waiting-for-changes"].includes(latestJob.status));
+  const canCreatePullRequest = Boolean(latestJob?.changedFiles.length);
   return (
     <Card>
       <CardHeader>
@@ -1036,12 +1243,18 @@ function JobControls({
           <CardDescription>Actions appear in the order this job needs them.</CardDescription>
         </div>
       </CardHeader>
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-5">
         <Button variant="secondary" onClick={onPrepareContext} disabled={!hasRequest || loading !== null || state.running}>
           {loading === "run" ? "Getting repository..." : "Get repository"}
         </Button>
         <Button variant="secondary" onClick={onGeneratePlan} disabled={!hasRequest || loading !== null}>
           {loading === "openai" ? "Planning..." : "Plan change"}
+        </Button>
+        <Button variant="secondary" onClick={onApplyChange} disabled={!canApplyChange || loading !== null}>
+          {loading === "apply-change" ? "Applying..." : "Apply change"}
+        </Button>
+        <Button variant="secondary" onClick={onCreatePullRequest} disabled={!canCreatePullRequest || loading !== null}>
+          {loading === "create-pr" ? "Opening PR..." : "Create PR"}
         </Button>
         <Button onClick={onStage} disabled={!hasRequest || loading !== null}>
           {loading === "staging" ? "Showing locally..." : "Show locally"}
@@ -1055,35 +1268,30 @@ function DeploymentPanel({
   deployment,
   loading,
   onStage,
-  onProduction,
   onDemote,
   reviewDecision,
 }: {
   deployment: DeploymentDemoState;
   loading: string | null;
   onStage: () => void;
-  onProduction: () => void;
   onDemote: () => void;
   reviewDecision: "idle" | "needs-revision";
 }) {
   const stagingReady = deployment.staging.status === "ready";
-  const productionAccepted =
-    stagingReady && deployment.production.status === "live" && deployment.production.headline === deployment.staging.headline;
 
   return (
     <Card>
       <CardHeader>
         <div>
           <CardTitle>Review build</CardTitle>
-          <CardDescription>Promote only after the prepared preview is ready.</CardDescription>
+          <CardDescription>Prepare local evidence for engineering review.</CardDescription>
         </div>
-        <Badge tone={productionAccepted ? "success" : stagingReady ? "info" : "neutral"}>
-          {productionAccepted ? "Accepted" : stagingReady ? "Ready to review" : "No review yet"}
+        <Badge tone={stagingReady ? "info" : "neutral"}>
+          {stagingReady ? "Ready for PR" : "No review yet"}
         </Badge>
       </CardHeader>
-      <div className="grid gap-3 xl:grid-cols-2">
+      <div className="grid gap-3">
         <EnvironmentPreview env={stagingReady ? deployment.staging : deployment.local} />
-        <EnvironmentPreview env={deployment.production} compact />
       </div>
       <div className="mt-5 flex flex-wrap gap-2">
         {!stagingReady ? (
@@ -1091,11 +1299,9 @@ function DeploymentPanel({
             {loading === "staging" ? "Preparing..." : "Prepare review"}
           </Button>
         ) : null}
-        {stagingReady && !productionAccepted && reviewDecision === "idle" ? (
+        {stagingReady && reviewDecision === "idle" ? (
           <>
-            <Button icon={<Rocket size={16} />} onClick={onProduction} disabled={loading !== null}>
-              {loading === "production" ? "Accepting..." : "Accept to production"}
-            </Button>
+            <Badge tone="info">Ready for engineering review</Badge>
             <Button variant="secondary" onClick={onDemote} disabled={loading !== null}>
               Send back
             </Button>
