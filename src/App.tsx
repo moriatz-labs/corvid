@@ -215,6 +215,21 @@ export default function App() {
   }
 
   async function deployProduction() {
+    const job = state.jobs[0];
+    if (job?.pullRequests.some((pullRequest) => pullRequest.status === "open")) {
+      await runAction(
+        "merge-pr",
+        () => api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/merge`, { method: "POST" }),
+        (nextJob) =>
+          setState((current) => ({
+            ...current,
+            jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
+          })),
+      );
+      setReviewDecision("idle");
+      return;
+    }
+
     await runAction(
       "production",
       () => api<DeploymentDemoState>("/api/deploy/production", { method: "POST" }),
@@ -863,6 +878,13 @@ function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revis
       tone: "info",
     };
   }
+  if (latestJob?.status === "merged") {
+    return {
+      label: "Merged",
+      detail: latestJob.finalUrl ? `Final output is available at ${latestJob.finalUrl}.` : "The job pull request has been merged.",
+      tone: "success",
+    };
+  }
   if (!state.running) {
     return {
       label: "Getting repository",
@@ -1171,6 +1193,19 @@ function JobSurface({
                   </div>
                 </div>
               ) : null}
+              {latestJob.finalUrl ? (
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="font-primary text-xs font-medium">Final output</p>
+                  <a
+                    className="mt-2 block break-all font-mono text-[11px] text-foreground underline"
+                    href={latestJob.finalUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {latestJob.finalUrl}
+                  </a>
+                </div>
+              ) : null}
             </div>
           ) : null}
           <div className="max-h-96 overflow-auto rounded-md bg-muted p-4 font-mono text-xs leading-relaxed text-foreground">
@@ -1282,7 +1317,7 @@ function DeploymentPanel({
         {stagingReady && !productionAccepted && reviewDecision === "idle" ? (
           <>
             <Button icon={<Rocket size={16} />} onClick={onProduction} disabled={loading !== null}>
-              {loading === "production" ? "Accepting..." : "Accept to production"}
+              {loading === "production" || loading === "merge-pr" ? "Accepting..." : "Accept to production"}
             </Button>
             <Button variant="secondary" onClick={onDemote} disabled={loading !== null}>
               Send back

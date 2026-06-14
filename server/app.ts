@@ -508,6 +508,42 @@ app.post("/api/jobs/:jobId/pull-request", async (_request, response) => {
   }
 });
 
+app.post("/api/jobs/:jobId/merge", async (_request, response) => {
+  const job = findJob(String(_request.params.jobId));
+  if (!job) {
+    response.status(404).json({ error: "job_not_found" });
+    return;
+  }
+  const token = getGitHubCloneToken();
+  if (!token) {
+    response.status(409).json({
+      error: "github_token_required",
+      message: "Connect GitHub or set GITHUB_TOKEN before merging pull requests.",
+      job,
+    });
+    return;
+  }
+  if (job.pullRequests.length === 0) {
+    response.status(409).json({
+      error: "pull_request_required",
+      message: "Create a pull request before merging this job.",
+      job,
+    });
+    return;
+  }
+
+  try {
+    await mergePullRequestsForJob(job, token);
+    response.json(job);
+  } catch (error) {
+    job.status = "failed";
+    job.currentAction = "Pull request merge failed";
+    job.logs.unshift(error instanceof Error ? redactToken(error.message, token) : "Pull request merge failed");
+    job.updatedAt = new Date().toISOString();
+    response.status(502).json({ error: "pull_request_merge_failed", job });
+  }
+});
+
 app.post("/api/openai/change-plan", async (request, response) => {
   const requestBody = String(request.body.requestBody ?? state.requests[0]?.body ?? "");
   const basePlan = createOpenAIChangePlan({
@@ -1044,6 +1080,42 @@ async function createGitHubPullRequest(
     html_url: payload.html_url,
     number: payload.number,
   };
+}
+
+async function mergePullRequestsForJob(job: JobRunState, token: string) {
+  for (const pullRequest of job.pullRequests.filter((item) => item.status === "open")) {
+    await mergeGitHubPullRequest(pullRequest.repo, pullRequest.number, token);
+    pullRequest.status = "merged";
+    job.logs.unshift(`[merge] merged ${pullRequest.repo}#${pullRequest.number}`);
+    state.logs.unshift(`[merge] merged ${pullRequest.url}`);
+  }
+
+  job.status = "merged";
+  job.currentAction = "Merged";
+  job.finalUrl = job.plan.repositories[0]?.healthUrl;
+  job.updatedAt = new Date().toISOString();
+}
+
+async function mergeGitHubPullRequest(repo: string, number: number, token: string) {
+  const normalized = repo.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+  const response = await fetch(`https://api.github.com/repos/${normalized}/pulls/${number}/merge`, {
+    method: "PUT",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "User-Agent": "corvin-local-agent",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify({
+      merge_method: "merge",
+      commit_title: `Merge Corvin job ${number}`,
+    }),
+  });
+  const payload = (await response.json()) as { merged?: boolean; message?: string };
+  if (!response.ok || !payload.merged) {
+    throw new Error(payload.message ?? `GitHub pull request merge failed with ${response.status}`);
+  }
 }
 
 function renderPullRequestBody(job: JobRunState, repositoryId: string) {
