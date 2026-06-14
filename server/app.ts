@@ -707,8 +707,7 @@ function restoreGitHubConnection() {
     githubConnection.connectedAt = persisted.connectedAt;
     githubConnection.accessToken = persisted.accessToken;
     githubConnection.error = undefined;
-    upsertIntegration("github", "connected", `Connected as ${persisted.login}`);
-    updateStep("github-sync", "succeeded");
+    connectCorvinDemoRepositories(`Connected as ${persisted.login}; frontend and backend repositories are ready to select`);
     updateFinalEntryPointStep();
     state.logs.unshift(`[github] restored OAuth connection for ${persisted.login}`);
   } catch (error) {

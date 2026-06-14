@@ -1,0 +1,9 @@
+.corvin/
+.corvin-whatsapp-auth/
+.env
+*.log
+*.tsbuildinfo
+node_modules/
+dist/
+demo-repositories/*/node_modules/
+demo-repositories/*/dist/
