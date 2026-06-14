@@ -1,16 +1,10 @@
 import {
   FileText,
   Github,
-  LayoutDashboard,
   Loader2,
   MessageCircle,
   QrCode,
   Rocket,
-  Play,
-  RefreshCw,
-  ScrollText,
-  Settings,
-  Square,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -26,7 +20,6 @@ import type {
   ExecDocument,
   ExecRepository,
   ExecSetupState,
-  Integration,
   MvpState,
   OpenAIChangePlan,
   PMRequest,
@@ -47,6 +40,7 @@ export default function App() {
   const [whatsAppConnect, setWhatsAppConnect] = useState<WhatsAppConnect | null>(null);
   const [whatsAppQrOpen, setWhatsAppQrOpen] = useState(false);
   const [githubPolling, setGithubPolling] = useState(false);
+  const [activeSurface, setActiveSurface] = useState<"settings" | "job">("settings");
 
   useEffect(() => {
     void refreshState();
@@ -263,6 +257,7 @@ export default function App() {
 
   const execReady = state.exec.exists && state.exec.validation.ready;
   const setupOpen = !execReady || showExecSetup;
+  const currentAction = getCurrentAction(state, reviewDecision);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -277,9 +272,9 @@ export default function App() {
           onClose={execReady ? () => setShowExecSetup(false) : undefined}
         />
       ) : null}
-      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <aside className="border-r border-border bg-card px-4 py-5 lg:min-h-screen">
-          <div className="mb-8 flex items-center gap-3">
+      <header className="border-b border-border bg-card">
+        <div className="mx-auto flex max-w-[1180px] flex-col gap-4 px-5 py-4 md:flex-row md:items-center md:justify-between lg:px-8">
+          <div className="flex items-center gap-3">
             <img
               src="/corvin-logo.png"
               alt="Corvin"
@@ -287,130 +282,63 @@ export default function App() {
             />
             <div>
               <p className="font-primary text-base font-medium">Corvin</p>
-              <p className="font-body text-xs text-muted-foreground">Agentic autonomy for PMs</p>
+              <p className="font-body text-xs text-muted-foreground">{state.workspace.name}</p>
             </div>
           </div>
-          <nav className="grid gap-1">
-            {[
-              ["Workspaces", LayoutDashboard],
-              ["Runs", Play],
-              ["Instructions", ScrollText],
-              ["Integrations", Github],
-              ["Settings", Settings],
-            ].map(([label, Icon]) => (
-              <button
-                key={String(label)}
-                className="flex min-h-10 items-center gap-3 rounded-md px-3 text-left font-primary text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-              >
-                <Icon size={17} />
-                {String(label)}
-              </button>
-            ))}
-          </nav>
-        </aside>
-
-        <main className="min-w-0">
-          <header className="flex min-h-14 flex-col justify-between gap-4 border-b border-border bg-background px-5 py-4 md:flex-row md:items-center lg:px-8">
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="font-primary text-2xl font-medium">{state.workspace.name}</h1>
-                <Badge tone={apiAvailable ? "success" : "warning"}>
-                  {apiAvailable ? "Local runner connected" : "Frontend demo mode"}
-                </Badge>
-                <Badge tone={execReady ? "success" : "warning"}>
-                  {execReady ? "exec.md ready" : "exec.md required"}
-                </Badge>
-              </div>
-              <p className="mt-1 font-body text-sm text-muted-foreground">
-                Request a change, run the prepared workspace, and review the result without touching repo setup.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="secondary"
-                icon={<RefreshCw size={16} />}
-                onClick={() => void refreshState()}
-                disabled={loading !== null}
-              >
-                Refresh
-              </Button>
-              <Button variant="secondary" icon={<FileText size={16} />} onClick={() => setShowExecSetup(true)} disabled={loading !== null}>
-                Configure exec.md
-              </Button>
-              <Button icon={<Play size={16} />} onClick={() => void runWorkspace()} disabled={loading !== null || state.running}>
-                {loading === "run" ? "Starting..." : "Run prepared workspace"}
-              </Button>
-            </div>
-          </header>
-
-          <div className="mx-auto grid max-w-[1180px] gap-5 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_340px] lg:px-8">
-            <section className="grid gap-6">
-              <IntegrationStrip
-                integrations={state.integrations}
-                loading={githubPolling ? "github" : loading}
-                onWhatsApp={() => void connectWhatsApp()}
-                onGitHub={() => void connectGitHub()}
-              />
-              {whatsAppConnect ? (
-                <WhatsAppConnectPanel
-                  connect={whatsAppConnect}
-                  loading={loading === "whatsapp" || loading === "whatsapp-refresh"}
-                  onRefresh={() => void refreshWhatsAppStatus()}
-                  onNewQr={() => void refreshWhatsAppQr()}
-                  onOpenQr={() => setWhatsAppQrOpen(true)}
-                />
-              ) : null}
-              <PMStoryPanel state={state} />
-              <RequestPanel
-                requestBody={requestBody}
-                requestType={requestType}
-                onBodyChange={setRequestBody}
-                onTypeChange={setRequestType}
-                onSubmit={() => void submitRequest()}
-                loading={loading === "request"}
-                disabled={!apiAvailable || !state.validation.ready || !execReady}
-                ready={state.validation.ready && execReady}
-              />
-              <DeploymentPanel
-                deployment={state.deployment}
-                loading={loading}
-                onStage={() => void deployStaging()}
-                onProduction={() => void deployProduction()}
-                onDemote={() => setReviewDecision("needs-revision")}
-                reviewDecision={reviewDecision}
-              />
-              <OpenAIPanel
-                state={state}
-                loading={loading === "openai"}
-                onGenerate={() => void generateOpenAIPlan()}
-              />
-            </section>
-
-            <aside className="grid content-start gap-6">
-              <WorkspaceStatusPanel state={state} onConfigure={() => setShowExecSetup(true)} />
-
-              <Card>
-                <CardHeader>
-                  <div>
-                    <CardTitle>Run logs</CardTitle>
-                <CardDescription>Recent local runner events.</CardDescription>
-                  </div>
-                </CardHeader>
-                <div className="max-h-72 overflow-auto rounded-md bg-muted p-4 font-mono text-xs leading-relaxed text-foreground">
-                  {state.logs.map((line) => (
-                    <p key={line}>{line}</p>
-                  ))}
-                </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Button variant="secondary" icon={<Square size={16} />} onClick={() => void stopWorkspace(false)}>
-                    Stop
-                  </Button>
-                </div>
-              </Card>
-            </aside>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant={activeSurface === "settings" ? "primary" : "secondary"}
+              onClick={() => setActiveSurface("settings")}
+            >
+              Settings
+            </Button>
+            <Button
+              variant={activeSurface === "job" ? "primary" : "secondary"}
+              onClick={() => setActiveSurface("job")}
+            >
+              Current job
+            </Button>
+            <Button onClick={() => setActiveSurface("job")} disabled={!execReady}>
+              Start a job
+            </Button>
           </div>
-        </main>
-      </div>
+        </div>
+      </header>
+
+      <main className="mx-auto grid max-w-[1180px] gap-6 px-5 py-6 lg:px-8">
+        <CurrentActionBanner action={currentAction} apiAvailable={apiAvailable} execReady={execReady} />
+
+        {activeSurface === "settings" ? (
+          <SettingsSurface
+            state={state}
+            loading={githubPolling ? "github" : loading}
+            whatsAppConnect={whatsAppConnect}
+            onConfigureExec={() => setShowExecSetup(true)}
+            onWhatsApp={() => void connectWhatsApp()}
+            onGitHub={() => void connectGitHub()}
+            onOpenJob={() => setActiveSurface("job")}
+          />
+        ) : (
+          <JobSurface
+            state={state}
+            requestBody={requestBody}
+            requestType={requestType}
+            loading={loading}
+            ready={state.validation.ready && execReady}
+            action={currentAction}
+            reviewDecision={reviewDecision}
+            onBodyChange={setRequestBody}
+            onTypeChange={setRequestType}
+            onSubmit={() => void submitRequest()}
+            onPrepareContext={() => void runWorkspace()}
+            onGeneratePlan={() => void generateOpenAIPlan()}
+            onStage={() => void deployStaging()}
+            onProduction={() => void deployProduction()}
+            onDemote={() => setReviewDecision("needs-revision")}
+            onStop={() => void stopWorkspace(false)}
+          />
+        )}
+      </main>
       {whatsAppConnect && whatsAppQrOpen ? (
         <WhatsAppQrModal
           connect={whatsAppConnect}
@@ -730,7 +658,7 @@ function ExecSetupEditor({
             onChange={(event) => onMarkdownChange(event.target.value)}
           />
         </div>
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2 self-end">
           <Button variant="secondary" onClick={onValidate} disabled={loading !== null}>
             {loading === "exec-validate" ? "Checking..." : "Check exec.md"}
           </Button>
@@ -792,23 +720,333 @@ function ValidationPanel({
   );
 }
 
-function PMStoryPanel({ state }: { state: MvpState }) {
+type CurrentAction = {
+  label: string;
+  detail: string;
+  tone: "neutral" | "success" | "warning" | "danger" | "info";
+};
+
+function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revision"): CurrentAction {
+  const execReady = state.exec.exists && state.exec.validation.ready;
+  const latestRequest = state.requests[0];
+  const stagingReady = state.deployment.staging.status === "ready";
+  const productionAccepted =
+    stagingReady &&
+    state.deployment.production.status === "live" &&
+    state.deployment.production.headline === state.deployment.staging.headline;
+
+  if (!execReady) {
+    return {
+      label: "Waiting for execution settings",
+      detail: "Execution, WhatsApp, and GitHub setup must be ready before jobs can run.",
+      tone: "warning",
+    };
+  }
+  if (!latestRequest) {
+    return {
+      label: "Waiting for job",
+      detail: "Start a job to request a copy change, product change, or bug fix.",
+      tone: "neutral",
+    };
+  }
+  if (!state.running) {
+    return {
+      label: "Getting repository",
+      detail: `${latestRequest.title} is captured. Corvin is ready to prepare the repo context for this job.`,
+      tone: "info",
+    };
+  }
+  if (!state.openAI.lastPlan || !stagingReady) {
+    return {
+      label: "Showing it locally",
+      detail: "The agent is preparing local output and a reviewable preview for this job.",
+      tone: "info",
+    };
+  }
+  if (reviewDecision === "needs-revision") {
+    return {
+      label: "Waiting for changes",
+      detail: "The review was sent back. The next run should prepare a revised preview.",
+      tone: "warning",
+    };
+  }
+  if (!productionAccepted) {
+    return {
+      label: "Waiting for approval",
+      detail: "A preview is ready. Accept it or send it back from this job.",
+      tone: "warning",
+    };
+  }
+  return {
+    label: "Approved",
+    detail: "The reviewed change has been promoted for this job.",
+    tone: "success",
+  };
+}
+
+function CurrentActionBanner({
+  action,
+  apiAvailable,
+  execReady,
+}: {
+  action: CurrentAction;
+  apiAvailable: boolean;
+  execReady: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-border bg-card p-4 md:flex-row md:items-center md:justify-between">
+      <div>
+        <p className="font-primary text-xs text-muted-foreground">Current action</p>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <Badge tone={action.tone}>{action.label}</Badge>
+          <p className="font-body text-sm text-muted-foreground">{action.detail}</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Badge tone={apiAvailable ? "success" : "warning"}>
+          {apiAvailable ? "Runner connected" : "Demo mode"}
+        </Badge>
+        <Badge tone={execReady ? "success" : "warning"}>{execReady ? "exec.md ready" : "exec.md required"}</Badge>
+      </div>
+    </div>
+  );
+}
+
+function SettingsSurface({
+  state,
+  loading,
+  whatsAppConnect,
+  onConfigureExec,
+  onWhatsApp,
+  onGitHub,
+  onOpenJob,
+}: {
+  state: MvpState;
+  loading: string | null;
+  whatsAppConnect: WhatsAppConnect | null;
+  onConfigureExec: () => void;
+  onWhatsApp: () => void;
+  onGitHub: () => void;
+  onOpenJob: () => void;
+}) {
+  const integrations = Object.fromEntries(state.integrations.map((integration) => [integration.id, integration]));
+  const execReady = state.exec.exists && state.exec.validation.ready;
+  const whatsApp = integrations.whatsapp;
+  const github = integrations.github;
+  const whatsAppConnected = whatsApp?.status === "connected" || whatsAppConnect?.connected;
+  const githubConnected = github?.status === "connected";
+
+  return (
+    <section className="grid gap-6">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <SettingsCard
+          icon={<FileText size={20} />}
+          title="Execution"
+          status={execReady ? "Ready" : "Required"}
+          tone={execReady ? "success" : "warning"}
+          detail={execReady ? "exec.md is valid and can package job setup." : "Create exec.md before jobs can run."}
+          actionLabel="Configure execution"
+          onAction={onConfigureExec}
+        />
+        <SettingsCard
+          icon={<MessageCircle size={20} />}
+          title="WhatsApp"
+          status={whatsAppConnected ? "Connected" : "Not connected"}
+          tone={whatsAppConnected ? "success" : "warning"}
+          detail={whatsAppConnected ? "WhatsApp intake is connected." : "Connect WhatsApp for message-based jobs."}
+          actionLabel={loading === "whatsapp" ? "Preparing..." : "Connect WhatsApp"}
+          onAction={whatsAppConnected ? undefined : onWhatsApp}
+        />
+        <SettingsCard
+          icon={<Github size={20} />}
+          title="GitHub"
+          status={githubConnected ? "Connected" : "Not connected"}
+          tone={githubConnected ? "success" : "warning"}
+          detail={githubConnected ? "Repository access is connected." : "Connect GitHub before repository jobs run."}
+          actionLabel={loading === "github" ? "Connecting..." : "Connect GitHub"}
+          onAction={githubConnected ? undefined : onGitHub}
+        />
+      </div>
+
+      <Card className="p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <CardTitle>Do you want to start a job?</CardTitle>
+            <CardDescription>Create copy changes, product changes, and bug fixes from the job page.</CardDescription>
+          </div>
+          <Button onClick={onOpenJob} disabled={!execReady}>
+            Start a job
+          </Button>
+        </div>
+      </Card>
+    </section>
+  );
+}
+
+function SettingsCard({
+  icon,
+  title,
+  status,
+  tone,
+  detail,
+  actionLabel,
+  onAction,
+}: {
+  icon: ReactNode;
+  title: string;
+  status: string;
+  tone: CurrentAction["tone"];
+  detail: string;
+  actionLabel: string;
+  onAction?: () => void;
+}) {
   return (
     <Card className="p-5">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-4">
-          <div className="grid size-12 shrink-0 place-items-center rounded-md bg-primary font-primary text-base text-primary-text">
-            {state.pm.avatarInitials}
-          </div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="grid size-11 place-items-center rounded-md bg-muted text-foreground">{icon}</div>
           <div>
-            <p className="font-primary text-xs text-muted-foreground">Current requester</p>
-            <h2 className="font-primary text-lg font-medium">{state.pm.name}</h2>
-            <p className="font-body text-xs text-muted-foreground">
-              {state.pm.role}, {state.pm.team}
-            </p>
+            <h2 className="font-primary text-base font-medium">{title}</h2>
+            <p className="font-body text-xs text-muted-foreground">{detail}</p>
           </div>
         </div>
-        <p className="max-w-xl font-body text-sm leading-relaxed text-muted-foreground">{state.pm.currentIntent}</p>
+        <Badge tone={tone}>{status}</Badge>
+      </div>
+      {onAction ? (
+        <Button className="mt-4 w-full" variant="secondary" onClick={onAction}>
+          {actionLabel}
+        </Button>
+      ) : null}
+    </Card>
+  );
+}
+
+function JobSurface({
+  state,
+  requestBody,
+  requestType,
+  loading,
+  ready,
+  action,
+  reviewDecision,
+  onBodyChange,
+  onTypeChange,
+  onSubmit,
+  onPrepareContext,
+  onGeneratePlan,
+  onStage,
+  onProduction,
+  onDemote,
+  onStop,
+}: {
+  state: MvpState;
+  requestBody: string;
+  requestType: string;
+  loading: string | null;
+  ready: boolean;
+  action: CurrentAction;
+  reviewDecision: "idle" | "needs-revision";
+  onBodyChange: (value: string) => void;
+  onTypeChange: (value: string) => void;
+  onSubmit: () => void;
+  onPrepareContext: () => void;
+  onGeneratePlan: () => void;
+  onStage: () => void;
+  onProduction: () => void;
+  onDemote: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid gap-6">
+        <RequestPanel
+          requestBody={requestBody}
+          requestType={requestType}
+          onBodyChange={onBodyChange}
+          onTypeChange={onTypeChange}
+          onSubmit={onSubmit}
+          loading={loading === "request"}
+          disabled={!ready}
+          ready={ready}
+        />
+        <JobControls
+          state={state}
+          loading={loading}
+          onPrepareContext={onPrepareContext}
+          onGeneratePlan={onGeneratePlan}
+          onStage={onStage}
+        />
+        <DeploymentPanel
+          deployment={state.deployment}
+          loading={loading}
+          onStage={onStage}
+          onProduction={onProduction}
+          onDemote={onDemote}
+          reviewDecision={reviewDecision}
+        />
+        <OpenAIPanel state={state} loading={loading === "openai"} onGenerate={onGeneratePlan} />
+      </div>
+      <aside className="grid content-start gap-6">
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Job logs</CardTitle>
+              <CardDescription>Exactly what the agent is doing right now.</CardDescription>
+            </div>
+            <Badge tone={action.tone}>{action.label}</Badge>
+          </CardHeader>
+          <div className="mb-4 rounded-md border border-border bg-background p-3">
+            <p className="font-primary text-sm font-medium">{action.label}</p>
+            <p className="mt-1 font-body text-xs leading-relaxed text-muted-foreground">{action.detail}</p>
+          </div>
+          <div className="max-h-96 overflow-auto rounded-md bg-muted p-4 font-mono text-xs leading-relaxed text-foreground">
+            {state.logs.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+          </div>
+          {state.running ? (
+            <Button className="mt-4 w-full" variant="secondary" onClick={onStop}>
+              Stop job
+            </Button>
+          ) : null}
+        </Card>
+      </aside>
+    </section>
+  );
+}
+
+function JobControls({
+  state,
+  loading,
+  onPrepareContext,
+  onGeneratePlan,
+  onStage,
+}: {
+  state: MvpState;
+  loading: string | null;
+  onPrepareContext: () => void;
+  onGeneratePlan: () => void;
+  onStage: () => void;
+}) {
+  const hasRequest = state.requests.length > 0;
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>Job actions</CardTitle>
+          <CardDescription>Actions appear in the order this job needs them.</CardDescription>
+        </div>
+      </CardHeader>
+      <div className="grid gap-3 md:grid-cols-3">
+        <Button variant="secondary" onClick={onPrepareContext} disabled={!hasRequest || loading !== null || state.running}>
+          {loading === "run" ? "Getting repository..." : "Get repository"}
+        </Button>
+        <Button variant="secondary" onClick={onGeneratePlan} disabled={!hasRequest || loading !== null}>
+          {loading === "openai" ? "Planning..." : "Plan change"}
+        </Button>
+        <Button onClick={onStage} disabled={!hasRequest || loading !== null}>
+          {loading === "staging" ? "Showing locally..." : "Show locally"}
+        </Button>
       </div>
     </Card>
   );
@@ -961,97 +1199,6 @@ function EnvironmentPreview({ env, compact = false }: { env: AppEnvironment; com
   );
 }
 
-function IntegrationStrip({
-  integrations,
-  loading,
-  onWhatsApp,
-  onGitHub,
-}: {
-  integrations: Integration[];
-  loading: string | null;
-  onWhatsApp: () => void;
-  onGitHub: () => void;
-}) {
-  const map = Object.fromEntries(integrations.map((integration) => [integration.id, integration]));
-  return (
-    <div className="grid gap-4 md:grid-cols-2">
-      <IntegrationCard
-        icon={<MessageCircle size={20} />}
-        integration={map.whatsapp}
-        actionLabel={loading === "whatsapp" ? "Preparing..." : map.whatsapp?.status === "connected" ? "View QR" : "Connect WhatsApp"}
-        onAction={onWhatsApp}
-      />
-      <IntegrationCard
-        icon={<Github size={20} />}
-        integration={map.github}
-        actionLabel={loading === "github" ? "Connecting..." : "Connect GitHub"}
-        onAction={onGitHub}
-      />
-    </div>
-  );
-}
-
-function WhatsAppConnectPanel({
-  connect,
-  loading,
-  onRefresh,
-  onNewQr,
-  onOpenQr,
-}: {
-  connect: WhatsAppConnect;
-  loading: boolean;
-  onRefresh: () => void;
-  onNewQr: () => void;
-  onOpenQr: () => void;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>WhatsApp thread pairing</CardTitle>
-          <CardDescription>{connect.connected ? "This WhatsApp account is connected" : connect.detail}</CardDescription>
-        </div>
-        <Badge tone={connect.connected ? "success" : "info"}>{connect.connected ? "Connected" : "Ready"}</Badge>
-      </CardHeader>
-      <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
-        <div className="grid content-start gap-4">
-          <div className="rounded-md border border-border bg-background p-4">
-            <div className="mb-2 flex items-center gap-2 font-primary text-sm font-medium">
-              <QrCode size={16} />
-              Linked device setup
-            </div>
-            <p className="font-body text-sm leading-relaxed text-muted-foreground">
-              Scan the QR pop-up from WhatsApp linked devices. Once connected, Corvin sends Connected to your WhatsApp account.
-            </p>
-          </div>
-          <div className="rounded-md border border-border bg-background p-4">
-            <p className="font-primary text-sm font-medium">After scanning</p>
-            <ol className="mt-3 grid gap-2 font-body text-sm leading-relaxed text-muted-foreground">
-              <li>1. Wait for this panel to show Connected.</li>
-              <li>2. Send a request in any WhatsApp chat available to the linked account.</li>
-              <li>3. Corvin captures the message and replies in that same chat from the linked account.</li>
-            </ol>
-          </div>
-          <div className="grid gap-2 font-body text-sm text-muted-foreground">
-            <p>Webhook: <span className="font-mono text-foreground">{connect.webhookUrl}</span></p>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2 md:justify-end">
-          <Button onClick={onOpenQr} disabled={loading || connect.connected}>
-            {connect.connected ? "Connected" : "Show QR"}
-          </Button>
-          <Button variant="secondary" onClick={onRefresh} disabled={loading || connect.connected}>
-            Refresh status
-          </Button>
-          <Button variant="secondary" onClick={onNewQr} disabled={loading || connect.connected}>
-            {loading ? "Refreshing..." : "New QR code"}
-          </Button>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
 function WhatsAppQrModal({
   connect,
   loading,
@@ -1117,81 +1264,6 @@ function WhatsAppQrModal({
             </Button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function IntegrationCard({
-  icon,
-  integration,
-  actionLabel,
-  onAction,
-}: {
-  icon: ReactNode;
-  integration?: Integration;
-  actionLabel: string;
-  onAction?: () => void;
-}) {
-  const connected = integration?.status === "connected" || integration?.status === "ready";
-  return (
-    <Card className="p-5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="grid size-11 place-items-center rounded-md bg-muted text-foreground">{icon}</div>
-          <div>
-            <h2 className="font-primary text-base font-medium">{integration?.label}</h2>
-            <p className="font-body text-xs text-muted-foreground">{connected ? "Connected" : "Not connected"}</p>
-          </div>
-        </div>
-        <Badge tone={connected ? "success" : "warning"}>{connected ? "Connected" : "Connect"}</Badge>
-      </div>
-      {!connected ? (
-        <Button className="mt-4 w-full" variant="secondary" onClick={onAction} disabled={!onAction}>
-          {actionLabel}
-        </Button>
-      ) : null}
-    </Card>
-  );
-}
-
-function WorkspaceStatusPanel({ state, onConfigure }: { state: MvpState; onConfigure: () => void }) {
-  const execReady = state.exec.exists && state.exec.validation.ready;
-  const healthyServices = state.workspace.services.filter((service) => service.status === "healthy").length;
-  return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>Workspace</CardTitle>
-          <CardDescription>Local setup status.</CardDescription>
-        </div>
-        <Badge tone={execReady ? "success" : "warning"}>{execReady ? "Ready" : "Blocked"}</Badge>
-      </CardHeader>
-      <div className="grid gap-3">
-        <StatusRow label="exec.md" value={execReady ? "Valid" : "Required"} tone={execReady ? "success" : "warning"} />
-        <StatusRow label="Repos" value={`${state.exec.runPlan?.commands.length ?? state.workspace.repositories.length} configured`} />
-        <StatusRow label="Services" value={`${healthyServices}/${state.workspace.services.length} healthy`} />
-        <StatusRow label="Runner" value={state.running ? "Running" : "Stopped"} tone={state.running ? "success" : "neutral"} />
-        <Button variant="secondary" icon={<FileText size={16} />} onClick={onConfigure}>
-          Configure exec.md
-        </Button>
-      </div>
-    </Card>
-  );
-}
-
-function StatusRow({
-  label,
-  value,
-  tone = "neutral",
-}: {
-  label: string;
-  value: string;
-  tone?: "neutral" | "success" | "warning" | "danger" | "info";
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
-      <p className="font-primary text-sm text-muted-foreground">{label}</p>
-      <Badge tone={tone}>{value}</Badge>
     </div>
   );
 }
