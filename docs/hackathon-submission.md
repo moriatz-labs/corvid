@@ -8,9 +8,9 @@ Corvin
 
 ### Tagline
 
-PMs can request a product change from WhatsApp, preview it locally or on staging, and push the reviewed update to production with OpenAI-powered planning.
+Agentic Autonomy for PM's, in a multi repository setting.
 
-Character count: 154 / 250
+Character count: 60 / 250
 
 ### Description
 

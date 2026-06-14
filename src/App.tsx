@@ -207,7 +207,7 @@ export default function App() {
             />
             <div>
               <p className="font-primary text-base font-medium">Corvin</p>
-              <p className="font-body text-xs text-muted-foreground">PM local agent</p>
+              <p className="font-body text-xs text-muted-foreground">Agentic autonomy for PM's</p>
             </div>
           </div>
           <nav className="grid gap-1">
