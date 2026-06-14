@@ -9,6 +9,7 @@ import {
   createDeploymentDemoState,
   createExecDraftFromBlueprint,
   createOpenAIChangePlan,
+  createJobFileEditPlan,
   createWebRequest,
   createRequestFromWhatsAppMessage,
   parseExecMarkdown,
@@ -333,6 +334,14 @@ Missing essentials should block save.
         localPath: "C:/tmp/corvin jobs/job_req_checkout-copy/repos/api",
       }),
     ]);
+  });
+
+  it("plans likely product files and copy replacement for a job request", () => {
+    const plan = createJobFileEditPlan("Change the checkout headline to explain charges clearly.");
+
+    expect(plan.replacementText).toBe("Checkout that explains every charge before you pay.");
+    expect(plan.targetFileHints).toContain("src/App.tsx");
+    expect(plan.fallbackFile).toBe("CORVIN_CHANGE_REQUEST.md");
   });
 
   it("creates an editable exec.md draft from the current workspace blueprint", () => {

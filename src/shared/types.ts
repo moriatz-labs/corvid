@@ -155,6 +155,13 @@ export type JobPullRequest = {
   status: "open" | "merged";
 };
 
+export type JobFileEditPlan = {
+  targetFileHints: string[];
+  replacementText: string;
+  fallbackFile: string;
+  summary: string;
+};
+
 export type JobRunStatus =
   | "planned"
   | "blocked"

@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import "./env";
 import cors from "cors";
@@ -14,6 +14,7 @@ import {
   canCapturePMRequest,
   createOpenAIChangePlan,
   createOpenAIRoutingPlan,
+  createJobFileEditPlan,
   createRequestFromWhatsAppMessage,
   createWebRequest,
   generateComposeFile,
@@ -933,12 +934,19 @@ async function applyJobChange(job: JobRunState, request: MvpState["requests"][nu
   job.status = "running";
   job.currentAction = feedback.trim() ? "Applying requested changes" : "Applying initial change";
   job.updatedAt = new Date().toISOString();
-  const changePath = `${repository.localPath}/CORVIN_CHANGE_REQUEST.md`;
-  const content = renderJobChangeFile(job, request, feedback);
-  mkdirSync(dirname(changePath), { recursive: true });
-  writeFileSync(changePath, content, "utf8");
-  job.logs.unshift(`[change] wrote ${changePath}`);
-  state.logs.unshift(`[change] wrote ${changePath}`);
+  const editPlan = createJobFileEditPlan(`${request.body}\n${feedback}`);
+  const editedPath = applyRepositoryEdit(repository.localPath, editPlan);
+  if (editedPath) {
+    job.logs.unshift(`[change] edited ${editedPath}`);
+    state.logs.unshift(`[change] edited ${editedPath}`);
+  } else {
+    const changePath = `${repository.localPath}/${editPlan.fallbackFile}`;
+    const content = renderJobChangeFile(job, request, feedback);
+    mkdirSync(dirname(changePath), { recursive: true });
+    writeFileSync(changePath, content, "utf8");
+    job.logs.unshift(`[change] wrote ${changePath}`);
+    state.logs.unshift(`[change] wrote ${changePath}`);
+  }
   await runGit(["add", "-N", "."], repository.localPath);
   await refreshJobDiff(job);
   job.status = "waiting-for-approval";
@@ -971,6 +979,61 @@ function renderJobChangeFile(job: JobRunState, request: MvpState["requests"][num
     "Replace this artifact with product-code edits once the repository-specific code agent selects the correct files.",
     "",
   ].filter((line, index, lines) => line || lines[index - 1]).join("\n");
+}
+
+function applyRepositoryEdit(rootPath: string, editPlan: ReturnType<typeof createJobFileEditPlan>) {
+  const candidates = findEditableFiles(rootPath, editPlan.targetFileHints);
+  for (const filePath of candidates) {
+    const original = readFileSync(filePath, "utf8");
+    const next = applyCopyEdit(original, editPlan.replacementText);
+    if (next !== original) {
+      writeFileSync(filePath, next, "utf8");
+      return filePath;
+    }
+  }
+  return null;
+}
+
+function findEditableFiles(rootPath: string, hints: string[]) {
+  const hinted = hints
+    .map((hint) => `${rootPath}/${hint}`.replace(/\\/g, "/"))
+    .filter((filePath) => existsSync(filePath) && statSync(filePath).isFile());
+  if (hinted.length > 0) {
+    return hinted;
+  }
+
+  const discovered: string[] = [];
+  walkEditableFiles(rootPath, discovered);
+  return discovered;
+}
+
+function walkEditableFiles(directory: string, output: string[], depth = 0) {
+  if (depth > 4 || output.length > 40 || !existsSync(directory)) return;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (["node_modules", ".git", "dist", "build", ".next"].includes(entry.name)) continue;
+    const fullPath = `${directory}/${entry.name}`.replace(/\\/g, "/");
+    if (entry.isDirectory()) {
+      walkEditableFiles(fullPath, output, depth + 1);
+      continue;
+    }
+    if (/\.(tsx|jsx|ts|js|mdx|html)$/.test(entry.name)) {
+      output.push(fullPath);
+    }
+  }
+}
+
+function applyCopyEdit(source: string, replacementText: string) {
+  const quotedHeading = /(["'`])([^"'`]{12,100}?(checkout|payment|charge|plan|order)[^"'`]{0,80}?)\1/i;
+  if (quotedHeading.test(source)) {
+    return source.replace(quotedHeading, (_match, quote: string) => `${quote}${replacementText}${quote}`);
+  }
+
+  const headingTag = /(<h[1-3][^>]*>)([^<]{8,160})(<\/h[1-3]>)/i;
+  if (headingTag.test(source)) {
+    return source.replace(headingTag, `$1${replacementText}$3`);
+  }
+
+  return source;
 }
 
 async function refreshJobDiff(job: JobRunState) {

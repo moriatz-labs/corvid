@@ -9,6 +9,7 @@ import type {
   ExecValidationIssue,
   ExecValidationResult,
   GithubOAuthConfig,
+  JobFileEditPlan,
   JobWorkspacePlan,
   PMRequest,
   DeploymentDemoState,
@@ -505,6 +506,33 @@ export function createOpenAIChangePlan(input: {
       "Deploy the visible change to staging for PM review.",
       "Promote the reviewed staging change to the production app.",
     ],
+  };
+}
+
+export function createJobFileEditPlan(requestBody: string): JobFileEditPlan {
+  const replacementText = inferHeadline(requestBody);
+  const lower = requestBody.toLowerCase();
+  const targetFileHints = [
+    "src/App.tsx",
+    "src/App.jsx",
+    "src/app/page.tsx",
+    "app/page.tsx",
+    "pages/index.tsx",
+    "pages/index.jsx",
+    "src/pages/index.tsx",
+    "src/components/Checkout.tsx",
+    "src/components/Checkout.jsx",
+  ];
+
+  if (lower.includes("api") || lower.includes("bug")) {
+    targetFileHints.push("src/server.ts", "src/index.ts", "server/index.ts", "api/index.ts");
+  }
+
+  return {
+    targetFileHints,
+    replacementText,
+    fallbackFile: "CORVIN_CHANGE_REQUEST.md",
+    summary: `Apply requested change with visible copy: ${replacementText}`,
   };
 }
 
