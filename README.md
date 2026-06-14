@@ -154,16 +154,25 @@ curl -X POST "http://127.0.0.1:8787/webhooks/whatsapp" \
 
 ## GitHub Entry Point
 
-Generate a real OAuth URL when `GITHUB_CLIENT_ID` is set:
+Create a GitHub App and set its user authorization callback URL to:
+
+```text
+http://localhost:8787/api/integrations/github/callback
+```
+
+Then copy the GitHub App credentials into `.env`:
+
+```bash
+GITHUB_APP_CLIENT_ID=...
+GITHUB_APP_CLIENT_SECRET=...
+GITHUB_APP_OAUTH_STATE=corvin-local-demo
+GITHUB_REDIRECT_URI=http://localhost:8787/api/integrations/github/callback
+```
+
+Generate the GitHub App authorization URL:
 
 ```bash
 curl "http://127.0.0.1:8787/api/integrations/github/authorize"
-```
-
-For local hackathon demo mode, connect repository sync without GitHub credentials:
-
-```bash
-curl -X POST "http://127.0.0.1:8787/api/integrations/github/sync-demo"
 ```
 
 ## OpenAI-Only Change Planning

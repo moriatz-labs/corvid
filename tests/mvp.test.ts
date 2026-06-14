@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildGitHubAuthorizeUrl,
   buildExecRunPlan,
+  buildWhatsAppConnect,
   canCapturePMRequest,
   createEmptyExecSetup,
   createDeploymentDemoState,
@@ -384,6 +385,36 @@ Missing essentials should block save.
     expect(url).toBe(
       "https://github.com/login/oauth/authorize?client_id=client_123&redirect_uri=http%3A%2F%2Flocalhost%3A8787%2Fapi%2Fgithub%2Fcallback&state=state-123&scope=repo+read%3Aorg",
     );
+  });
+
+  it("encodes a local GitHub App OAuth callback URL", () => {
+    const url = buildGitHubAuthorizeUrl({
+      clientId: "client_abc",
+      redirectUri: "http://localhost:8787/api/integrations/github/callback",
+      state: "corvin-local-demo",
+      scopes: ["repo", "read:org"],
+    });
+
+    expect(url).toContain("client_id=client_abc");
+    expect(url).toContain("redirect_uri=http%3A%2F%2Flocalhost%3A8787%2Fapi%2Fintegrations%2Fgithub%2Fcallback");
+    expect(url).toContain("state=corvin-local-demo");
+    expect(url).toContain("scope=repo+read%3Aorg");
+  });
+
+  it("builds a WhatsApp linked-device QR descriptor", () => {
+    const connect = buildWhatsAppConnect({
+      connected: false,
+      status: "qr",
+      origin: "http://localhost:8787/",
+      qrImageUrl: "data:image/png;base64,qr",
+      detail: "Scan the QR code in WhatsApp",
+    });
+
+    expect(connect.connected).toBe(false);
+    expect(connect.status).toBe("qr");
+    expect(connect.detail).toBe("Scan the QR code in WhatsApp");
+    expect(connect.webhookUrl).toBe("http://localhost:8787/webhooks/whatsapp");
+    expect(connect.qrImageUrl).toBe("data:image/png;base64,qr");
   });
 
   it("creates an OpenAI-only change plan when no API key is available", () => {
