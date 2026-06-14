@@ -141,6 +141,20 @@ export type JobWorkspacePlan = {
   createdAt: string;
 };
 
+export type JobChangedFile = {
+  repositoryId: string;
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "unknown";
+};
+
+export type JobPullRequest = {
+  repositoryId: string;
+  repo: string;
+  url: string;
+  number: number;
+  status: "open" | "merged";
+};
+
 export type JobRunStatus =
   | "planned"
   | "blocked"
@@ -161,9 +175,11 @@ export type JobRunState = {
   currentAction: string;
   plan: JobWorkspacePlan;
   logs: string[];
+  changedFiles: JobChangedFile[];
+  diff?: string;
+  pullRequests: JobPullRequest[];
   startedAt: string;
   updatedAt: string;
-  pullRequestUrl?: string;
   finalUrl?: string;
 };
 

@@ -223,6 +223,61 @@ export default function App() {
     setReviewDecision("idle");
   }
 
+  async function applyJobChange() {
+    const job = state.jobs[0];
+    if (!job) return;
+    await runAction(
+      "apply-change",
+      () =>
+        api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/apply-change`, {
+          method: "POST",
+          body: JSON.stringify({ feedback: reviewDecision === "needs-revision" ? "Apply requested review changes." : "" }),
+        }),
+      (nextJob) =>
+        setState((current) => ({
+          ...current,
+          jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
+        })),
+    );
+  }
+
+  async function createJobPullRequest() {
+    const job = state.jobs[0];
+    if (!job) return;
+    await runAction(
+      "create-pr",
+      () => api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/pull-request`, { method: "POST" }),
+      (nextJob) =>
+        setState((current) => ({
+          ...current,
+          jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
+        })),
+    );
+  }
+
+  async function requestJobChanges() {
+    const job = state.jobs[0];
+    if (!job) {
+      setReviewDecision("needs-revision");
+      return;
+    }
+    await runAction(
+      "request-changes",
+      () =>
+        api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/request-changes`, {
+          method: "POST",
+          body: JSON.stringify({ feedback: "PM sent the review back for changes." }),
+        }),
+      (nextJob) => {
+        setReviewDecision("needs-revision");
+        setState((current) => ({
+          ...current,
+          jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
+        }));
+      },
+    );
+  }
+
   async function validateExecMarkdown() {
     await runAction(
       "exec-validate",
@@ -332,9 +387,11 @@ export default function App() {
             onSubmit={() => void submitRequest()}
             onPrepareContext={() => void runWorkspace()}
             onGeneratePlan={() => void generateOpenAIPlan()}
+            onApplyChange={() => void applyJobChange()}
+            onCreatePullRequest={() => void createJobPullRequest()}
             onStage={() => void deployStaging()}
             onProduction={() => void deployProduction()}
-            onDemote={() => setReviewDecision("needs-revision")}
+            onDemote={() => void requestJobChanges()}
             onStop={() => void stopWorkspace(false)}
           />
         )}
@@ -778,6 +835,34 @@ function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revis
       tone: "success",
     };
   }
+  if (latestJob?.status === "healthy") {
+    return {
+      label: "Showing it locally",
+      detail: "Localhost services are healthy and ready for changes.",
+      tone: "success",
+    };
+  }
+  if (latestJob?.status === "waiting-for-approval") {
+    return {
+      label: "Waiting for approval",
+      detail: `${latestJob.changedFiles.length} changed files are ready for review.`,
+      tone: "warning",
+    };
+  }
+  if (latestJob?.status === "waiting-for-changes") {
+    return {
+      label: "Waiting for changes",
+      detail: latestJob.logs[0] ?? "Review feedback is ready for the next change iteration.",
+      tone: "warning",
+    };
+  }
+  if (latestJob?.status === "pr-open") {
+    return {
+      label: "Pull request open",
+      detail: latestJob.pullRequests[0]?.url ?? "Review the opened pull request.",
+      tone: "info",
+    };
+  }
   if (!state.running) {
     return {
       label: "Getting repository",
@@ -963,6 +1048,8 @@ function JobSurface({
   onSubmit,
   onPrepareContext,
   onGeneratePlan,
+  onApplyChange,
+  onCreatePullRequest,
   onStage,
   onProduction,
   onDemote,
@@ -980,6 +1067,8 @@ function JobSurface({
   onSubmit: () => void;
   onPrepareContext: () => void;
   onGeneratePlan: () => void;
+  onApplyChange: () => void;
+  onCreatePullRequest: () => void;
   onStage: () => void;
   onProduction: () => void;
   onDemote: () => void;
@@ -1004,6 +1093,8 @@ function JobSurface({
           loading={loading}
           onPrepareContext={onPrepareContext}
           onGeneratePlan={onGeneratePlan}
+          onApplyChange={onApplyChange}
+          onCreatePullRequest={onCreatePullRequest}
           onStage={onStage}
         />
         <DeploymentPanel
@@ -1050,6 +1141,36 @@ function JobSurface({
                   </div>
                 ))}
               </div>
+              {latestJob.changedFiles.length > 0 ? (
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="font-primary text-xs font-medium">Changed files</p>
+                  <div className="mt-2 grid gap-1">
+                    {latestJob.changedFiles.slice(0, 6).map((file) => (
+                      <p key={`${file.repositoryId}-${file.path}`} className="break-all font-mono text-[11px] text-muted-foreground">
+                        {file.repositoryId}: {file.status} {file.path}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {latestJob.pullRequests.length > 0 ? (
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="font-primary text-xs font-medium">Pull requests</p>
+                  <div className="mt-2 grid gap-1">
+                    {latestJob.pullRequests.map((pullRequest) => (
+                      <a
+                        key={pullRequest.url}
+                        className="break-all font-mono text-[11px] text-foreground underline"
+                        href={pullRequest.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {pullRequest.repo}#{pullRequest.number}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
           <div className="max-h-96 overflow-auto rounded-md bg-muted p-4 font-mono text-xs leading-relaxed text-foreground">
@@ -1073,15 +1194,22 @@ function JobControls({
   loading,
   onPrepareContext,
   onGeneratePlan,
+  onApplyChange,
+  onCreatePullRequest,
   onStage,
 }: {
   state: MvpState;
   loading: string | null;
   onPrepareContext: () => void;
   onGeneratePlan: () => void;
+  onApplyChange: () => void;
+  onCreatePullRequest: () => void;
   onStage: () => void;
 }) {
   const hasRequest = state.requests.length > 0;
+  const latestJob = state.jobs[0];
+  const canApplyChange = Boolean(latestJob && ["healthy", "branch-ready", "waiting-for-changes"].includes(latestJob.status));
+  const canCreatePullRequest = Boolean(latestJob?.changedFiles.length);
   return (
     <Card>
       <CardHeader>
@@ -1090,12 +1218,18 @@ function JobControls({
           <CardDescription>Actions appear in the order this job needs them.</CardDescription>
         </div>
       </CardHeader>
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-5">
         <Button variant="secondary" onClick={onPrepareContext} disabled={!hasRequest || loading !== null || state.running}>
           {loading === "run" ? "Getting repository..." : "Get repository"}
         </Button>
         <Button variant="secondary" onClick={onGeneratePlan} disabled={!hasRequest || loading !== null}>
           {loading === "openai" ? "Planning..." : "Plan change"}
+        </Button>
+        <Button variant="secondary" onClick={onApplyChange} disabled={!canApplyChange || loading !== null}>
+          {loading === "apply-change" ? "Applying..." : "Apply change"}
+        </Button>
+        <Button variant="secondary" onClick={onCreatePullRequest} disabled={!canCreatePullRequest || loading !== null}>
+          {loading === "create-pr" ? "Opening PR..." : "Create PR"}
         </Button>
         <Button onClick={onStage} disabled={!hasRequest || loading !== null}>
           {loading === "staging" ? "Showing locally..." : "Show locally"}

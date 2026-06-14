@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import "./env";
 import cors from "cors";
 import express from "express";
@@ -24,7 +25,7 @@ import {
   validateBlueprint,
 } from "../src/shared/mvp";
 import { createInitialState } from "../src/shared/demo";
-import type { ExecDocument, ExecSetupState, JobRunState, MvpState, ServiceConfig, WorkspaceBlueprint } from "../src/shared/types";
+import type { ExecDocument, ExecSetupState, JobChangedFile, JobRunState, MvpState, ServiceConfig, WorkspaceBlueprint } from "../src/shared/types";
 import type { WhatsAppIntake } from "../src/shared/types";
 import {
   getWhatsAppSnapshot,
@@ -441,6 +442,72 @@ app.post("/api/requests", (request, response) => {
   response.json(pmRequest);
 });
 
+app.post("/api/jobs/:jobId/apply-change", async (request, response) => {
+  const job = findJob(String(request.params.jobId));
+  if (!job) {
+    response.status(404).json({ error: "job_not_found" });
+    return;
+  }
+  const pmRequest = state.requests.find((item) => item.id === job.requestId);
+  if (!pmRequest) {
+    response.status(409).json({ error: "request_not_found", message: "The job request is missing." });
+    return;
+  }
+
+  try {
+    await applyJobChange(job, pmRequest, String(request.body?.feedback ?? ""));
+    response.json(job);
+  } catch (error) {
+    job.status = "failed";
+    job.currentAction = "Change application failed";
+    job.logs.unshift(error instanceof Error ? error.message : "Change application failed");
+    job.updatedAt = new Date().toISOString();
+    response.status(502).json({ error: "change_apply_failed", job });
+  }
+});
+
+app.post("/api/jobs/:jobId/request-changes", (request, response) => {
+  const job = findJob(String(request.params.jobId));
+  if (!job) {
+    response.status(404).json({ error: "job_not_found" });
+    return;
+  }
+  const feedback = String(request.body?.feedback ?? "PM requested changes.");
+  job.status = "waiting-for-changes";
+  job.currentAction = "Waiting for changes";
+  job.logs.unshift(`[review] ${feedback}`);
+  job.updatedAt = new Date().toISOString();
+  response.json(job);
+});
+
+app.post("/api/jobs/:jobId/pull-request", async (_request, response) => {
+  const job = findJob(String(_request.params.jobId));
+  if (!job) {
+    response.status(404).json({ error: "job_not_found" });
+    return;
+  }
+  const token = getGitHubCloneToken();
+  if (!token) {
+    response.status(409).json({
+      error: "github_token_required",
+      message: "Connect GitHub or set GITHUB_TOKEN before creating pull requests.",
+      job,
+    });
+    return;
+  }
+
+  try {
+    await createPullRequestsForJob(job, token);
+    response.json(job);
+  } catch (error) {
+    job.status = "failed";
+    job.currentAction = "Pull request creation failed";
+    job.logs.unshift(error instanceof Error ? redactToken(error.message, token) : "Pull request creation failed");
+    job.updatedAt = new Date().toISOString();
+    response.status(502).json({ error: "pull_request_failed", job });
+  }
+});
+
 app.post("/api/openai/change-plan", async (request, response) => {
   const requestBody = String(request.body.requestBody ?? state.requests[0]?.body ?? "");
   const basePlan = createOpenAIChangePlan({
@@ -634,6 +701,8 @@ function createPlannedJob(request: MvpState["requests"][number], document: ExecD
     currentAction: "Planning repository workspace",
     plan,
     logs: [`[job] planned ${plan.repositories.length} repositories for ${request.id}`],
+    changedFiles: [],
+    pullRequests: [],
     startedAt: now,
     updatedAt: now,
   };
@@ -813,6 +882,184 @@ function stopJobProcesses() {
     }
   }
   jobDevProcesses.clear();
+}
+
+function findJob(jobId: string) {
+  return state.jobs.find((job) => job.id === jobId);
+}
+
+async function applyJobChange(job: JobRunState, request: MvpState["requests"][number], feedback: string) {
+  const repository = pickWritableRepository(job);
+  if (!repository) {
+    throw new Error("No cloned repository is ready for changes.");
+  }
+
+  job.status = "running";
+  job.currentAction = feedback.trim() ? "Applying requested changes" : "Applying initial change";
+  job.updatedAt = new Date().toISOString();
+  const changePath = `${repository.localPath}/CORVIN_CHANGE_REQUEST.md`;
+  const content = renderJobChangeFile(job, request, feedback);
+  mkdirSync(dirname(changePath), { recursive: true });
+  writeFileSync(changePath, content, "utf8");
+  job.logs.unshift(`[change] wrote ${changePath}`);
+  state.logs.unshift(`[change] wrote ${changePath}`);
+  await runGit(["add", "-N", "."], repository.localPath);
+  await refreshJobDiff(job);
+  job.status = "waiting-for-approval";
+  job.currentAction = "Waiting for approval";
+  job.updatedAt = new Date().toISOString();
+}
+
+function pickWritableRepository(job: JobRunState) {
+  return (
+    job.plan.repositories.find((repository) => ["healthy", "branch-ready", "starting"].includes(repository.status)) ??
+    job.plan.repositories[0]
+  );
+}
+
+function renderJobChangeFile(job: JobRunState, request: MvpState["requests"][number], feedback: string) {
+  return [
+    "# Corvin Change Request",
+    "",
+    `Job: ${job.id}`,
+    `Request: ${request.id}`,
+    `Branch: ${job.plan.branchName}`,
+    "",
+    "## Request",
+    request.body.trim(),
+    "",
+    feedback.trim() ? "## Review Feedback" : "",
+    feedback.trim(),
+    "",
+    "## Next Implementation Step",
+    "Replace this artifact with product-code edits once the repository-specific code agent selects the correct files.",
+    "",
+  ].filter((line, index, lines) => line || lines[index - 1]).join("\n");
+}
+
+async function refreshJobDiff(job: JobRunState) {
+  const diffs: string[] = [];
+  const changedFiles: JobChangedFile[] = [];
+  for (const repository of job.plan.repositories) {
+    const nameStatus = await runGit(["diff", "--name-status"], repository.localPath);
+    if (!nameStatus.trim()) {
+      continue;
+    }
+    for (const line of nameStatus.split(/\r?\n/).filter(Boolean)) {
+      const [statusCode, filePath] = line.split(/\s+/, 2);
+      changedFiles.push({
+        repositoryId: repository.id,
+        path: filePath,
+        status: mapGitStatus(statusCode),
+      });
+    }
+    const diff = await runGit(["diff", "--", "."], repository.localPath);
+    if (diff.trim()) {
+      diffs.push(`diff --corvin-repository ${repository.id}\n${diff}`);
+    }
+  }
+  job.changedFiles = changedFiles;
+  job.diff = diffs.join("\n");
+  job.logs.unshift(`[diff] captured ${changedFiles.length} changed files`);
+}
+
+function mapGitStatus(statusCode: string) {
+  if (statusCode.startsWith("A")) return "added";
+  if (statusCode.startsWith("M")) return "modified";
+  if (statusCode.startsWith("D")) return "deleted";
+  if (statusCode.startsWith("R")) return "renamed";
+  return "unknown";
+}
+
+async function createPullRequestsForJob(job: JobRunState, token: string) {
+  await refreshJobDiff(job);
+  if (job.changedFiles.length === 0) {
+    throw new Error("No changed files are available to push.");
+  }
+
+  const changedRepoIds = new Set(job.changedFiles.map((file) => file.repositoryId));
+  for (const repository of job.plan.repositories.filter((item) => changedRepoIds.has(item.id))) {
+    await runGit(["add", "-A"], repository.localPath);
+    const staged = await runGit(["diff", "--cached", "--name-only"], repository.localPath);
+    if (!staged.trim()) {
+      continue;
+    }
+    await runGit(
+      [
+        "-c",
+        "user.name=Corvin",
+        "-c",
+        "user.email=corvin@local",
+        "commit",
+        "-m",
+        `Corvin job ${job.id}`,
+      ],
+      repository.localPath,
+    );
+    await runGit(["push", withGitHubToken(repository.cloneUrl, token), `HEAD:${repository.branchName}`], repository.localPath);
+    const pullRequest = await createGitHubPullRequest(repository.repo, token, {
+      title: `Corvin job ${job.id}`,
+      head: repository.branchName,
+      base: "main",
+      body: renderPullRequestBody(job, repository.id),
+    });
+    job.pullRequests.push({
+      repositoryId: repository.id,
+      repo: repository.repo,
+      url: pullRequest.html_url,
+      number: pullRequest.number,
+      status: "open",
+    });
+    job.logs.unshift(`[pr] opened ${repository.repo}#${pullRequest.number}`);
+    state.logs.unshift(`[pr] opened ${pullRequest.html_url}`);
+  }
+
+  job.status = "pr-open";
+  job.currentAction = "Pull request open";
+  job.updatedAt = new Date().toISOString();
+}
+
+async function createGitHubPullRequest(
+  repo: string,
+  token: string,
+  input: { title: string; head: string; base: string; body: string },
+) {
+  const normalized = repo.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+  const response = await fetch(`https://api.github.com/repos/${normalized}/pulls`, {
+    method: "POST",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "User-Agent": "corvin-local-agent",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify(input),
+  });
+  const payload = (await response.json()) as { html_url?: string; number?: number; message?: string };
+  if (!response.ok || !payload.html_url || !payload.number) {
+    throw new Error(payload.message ?? `GitHub pull request creation failed with ${response.status}`);
+  }
+  return {
+    html_url: payload.html_url,
+    number: payload.number,
+  };
+}
+
+function renderPullRequestBody(job: JobRunState, repositoryId: string) {
+  const files = job.changedFiles
+    .filter((file) => file.repositoryId === repositoryId)
+    .map((file) => `- ${file.status}: ${file.path}`)
+    .join("\n");
+  return [
+    `Corvin job: ${job.id}`,
+    "",
+    "## Changed files",
+    files || "- No files captured",
+    "",
+    "## Review",
+    "Review the diff, request changes in Corvin if needed, then merge after approval.",
+  ].join("\n");
 }
 
 function withGitHubToken(cloneUrl: string, token: string) {
