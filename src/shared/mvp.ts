@@ -19,7 +19,7 @@ import type {
   WhatsAppConnect,
   WhatsAppIntake,
   WorkspaceBlueprint,
-} from "./types";
+} from "./types.js";
 
 type ValidationInput = {
   dockerReady: boolean;

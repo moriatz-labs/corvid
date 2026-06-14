@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import "./env";
+import "./env.js";
 import cors from "cors";
 import express from "express";
 import OpenAI from "openai";
@@ -25,8 +25,8 @@ import {
   stageRequestedChange,
   validateExecDocument,
   validateBlueprint,
-} from "../src/shared/mvp";
-import { createInitialState } from "../src/shared/demo";
+} from "../src/shared/mvp.js";
+import { createCorvinDemoBlueprint, createPublicInitialState } from "../src/shared/demo.js";
 import type {
   ExecDocument,
   ExecSetupState,
@@ -36,17 +36,17 @@ import type {
   MvpState,
   ServiceConfig,
   WorkspaceBlueprint,
-} from "../src/shared/types";
-import type { WhatsAppIntake } from "../src/shared/types";
+} from "../src/shared/types.js";
+import type { WhatsAppIntake } from "../src/shared/types.js";
 import {
   getWhatsAppSnapshot,
   refreshWhatsAppConnector,
   sendWhatsAppMessage,
   startWhatsAppConnector,
-} from "./whatsapp";
+} from "./whatsapp.js";
 
 export const app = express();
-export const state: MvpState = createInitialState();
+export const state: MvpState = createPublicInitialState();
 const execFileUrl = new URL("../exec.md", import.meta.url);
 const corvinDataDirUrl = new URL("../.corvin/", import.meta.url);
 const githubAuthFileUrl = new URL("../.corvin/github-auth.json", import.meta.url);
@@ -86,7 +86,6 @@ state.openAI = {
   routing: createOpenAIRoutingPlan(),
 };
 restoreGitHubConnection();
-syncExecFromDisk();
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
@@ -129,10 +128,9 @@ app.post("/api/exec", (request, response) => {
 });
 
 app.post("/api/integrations/github/sync-demo", (_request, response) => {
-  upsertIntegration("github", "connected", "Demo repository sync is connected");
+  connectCorvinDemoRepositories("Demo repository sync connected the public frontend and backend repositories");
   updateStep("github-sync", "succeeded");
   updateFinalEntryPointStep();
-  state.logs.unshift("[github] demo repository sync connected");
   response.json(state);
 });
 
@@ -145,13 +143,17 @@ app.get("/api/integrations/github/authorize", (request, response) => {
     process.env.GITHUB_REDIRECT_URI ?? `${protocol}://${host}/api/integrations/github/callback`;
 
   if (!clientId || !clientSecret) {
-    githubConnection.connected = false;
-    githubConnection.error = "GitHub App OAuth is not configured";
-    upsertIntegration("github", "needs-config", "Set GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET to connect GitHub");
-    updateStep("github-sync", "pending");
+    githubConnection.connected = true;
+    githubConnection.login = getCorvinDemoGitHubOwner();
+    githubConnection.name = "Corvin demo";
+    githubConnection.scopes = ["public_repo_demo"];
+    githubConnection.connectedAt = new Date().toISOString();
+    githubConnection.error = undefined;
+    connectCorvinDemoRepositories("Loaded public corvin-demo-app frontend and backend repositories");
     response.json({
-      configured: false,
-      message: "Set GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET from your GitHub App settings.",
+      configured: true,
+      connected: true,
+      message: "Loaded the public corvin-demo-app frontend and backend repositories. Set GitHub App credentials later for real OAuth.",
     });
     return;
   }
@@ -233,6 +235,7 @@ app.get("/api/integrations/github/callback", async (request, response) => {
     persistGitHubConnection();
 
     upsertIntegration("github", "connected", `Connected as ${profile.login}`);
+    connectCorvinDemoRepositories(`Connected as ${profile.login}; frontend and backend repositories are ready to select`);
     updateStep("github-sync", "succeeded");
     updateFinalEntryPointStep();
     state.logs.unshift(`[github] connected as ${profile.login}`);
@@ -325,6 +328,8 @@ app.post("/api/workspace/validate", (_request, response) => {
     env: {
       DATABASE_URL: "postgres://postgres:corvin@localhost:5432/postgres",
       API_BASE_URL: "http://localhost:3000",
+      VITE_API_BASE_URL: "http://localhost:3000",
+      PORT: "3000",
       WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN ?? "local-dev",
     },
     occupiedPorts: [],
@@ -1539,29 +1544,6 @@ function updateFinalEntryPointStep() {
   }
 }
 
-function syncExecFromDisk() {
-  if (!existsSync(execFileUrl)) {
-    return;
-  }
-
-  const markdown = readFileSync(execFileUrl, "utf8");
-  const parsed = parseExecMarkdown(markdown);
-  if (!parsed.ok) {
-    state.exec = {
-      exists: false,
-      markdown,
-      validation: {
-        ready: false,
-        errors: parsed.errors,
-        warnings: [],
-      },
-    };
-    return;
-  }
-
-  applyExecDocument(parsed.document, markdown);
-}
-
 function createExecSetupFromMarkdown(markdown: string, includeEnvValues: boolean): ExecSetupState {
   const parsed = parseExecMarkdown(markdown);
   if (!parsed.ok) {
@@ -1610,6 +1592,68 @@ function applyExecDocument(document: ExecDocument, markdown: string) {
   state.compose = generateComposeFile(state.workspace);
 }
 
+function connectCorvinDemoRepositories(detail: string) {
+  const blueprint = createCorvinDemoBlueprint(getCorvinDemoGitHubOwner());
+  const markdown = createExecDraftFromWorkspace(blueprint);
+  state.workspace = blueprint;
+  state.exec = createExecSetupFromMarkdown(markdown, true);
+  state.validation = validateBlueprint(state.workspace, {
+    dockerReady: true,
+    syncedRepositoryIds: state.workspace.repositories.map((repository) => repository.id),
+    env: getDemoEnvValues(),
+    occupiedPorts: [],
+  });
+  state.compose = generateComposeFile(state.workspace);
+  upsertIntegration("github", "connected", detail);
+  updateStep("github-sync", "succeeded");
+  state.logs.unshift("[github] corvin-demo-app frontend and backend repositories connected");
+}
+
+function createExecDraftFromWorkspace(blueprint: WorkspaceBlueprint) {
+  return [
+    "# exec.md",
+    "",
+    "## Purpose",
+    `Run ${blueprint.name} locally for PM review.`,
+    "",
+    "## Repositories",
+    "```yaml",
+    "repositories:",
+    ...blueprint.repositories.map((repository) => {
+      const service = blueprint.services.find((item) => item.repositoryId === repository.id);
+      const commands = splitStartupCommand(repository.startupCommand ?? "");
+      return [
+        `  - id: ${repository.id}`,
+        `    repo: ${repository.sourceRef.replace(/^synced-repo:\/\//, "")}`,
+        `    role: ${repository.purpose ?? repository.label}`,
+        `    install: ${commands.install}`,
+        `    dev: ${commands.dev}`,
+        `    health: ${service?.healthUrl ?? ""}`,
+      ].join("\n");
+    }),
+    "```",
+    "",
+    "## Environment",
+    "```yaml",
+    "global:",
+    ...blueprint.environment.required.map((key) => [
+      `  - name: ${key}`,
+      "    required: true",
+      `    description: Required to run ${blueprint.name} locally.`,
+    ].join("\n")),
+    "perRepo: {}",
+    "```",
+    "",
+    "## Local Run Notes",
+    blueprint.executionScriptSummary ?? "Generated from the connected repository selection.",
+    "",
+  ].join("\n");
+}
+
+function getCorvinDemoGitHubOwner() {
+  return process.env.CORVIN_DEMO_GITHUB_OWNER ?? "Paul-M-Kallarackal";
+}
+
 function createWorkspaceFromExec(document: ExecDocument, current: WorkspaceBlueprint): WorkspaceBlueprint {
   const services: ServiceConfig[] = document.repositories.map((repository) => ({
     id: repository.id,
@@ -1654,7 +1698,23 @@ function getDemoEnvValues(): Record<string, string | undefined> {
   return {
     DATABASE_URL: process.env.DATABASE_URL ?? "postgres://postgres:corvin@localhost:5432/postgres",
     API_BASE_URL: process.env.API_BASE_URL ?? "http://localhost:3000",
+    VITE_API_BASE_URL: process.env.VITE_API_BASE_URL ?? "http://localhost:3000",
+    PORT: process.env.PORT ?? "3000",
     WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN ?? "local-dev",
+  };
+}
+
+function splitStartupCommand(command: string): { install: string; dev: string } {
+  const parts = command.split("&&").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    return {
+      install: parts[0],
+      dev: parts.slice(1).join(" && "),
+    };
+  }
+  return {
+    install: command,
+    dev: command,
   };
 }
 

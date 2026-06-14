@@ -7,7 +7,7 @@ import makeWASocket, {
   type WASocket,
 } from "@whiskeysockets/baileys";
 import P from "pino";
-import type { WhatsAppIntake } from "../src/shared/types";
+import type { WhatsAppIntake } from "../src/shared/types.js";
 
 type WhatsAppConnectionStatus = "idle" | "connecting" | "qr" | "connected" | "failed";
 

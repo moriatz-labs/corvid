@@ -14,6 +14,17 @@ Open:
 - App: http://127.0.0.1:5173
 - Local runner API: http://127.0.0.1:8787
 
+## Public Demo Repositories
+
+The demo app is split into two public GitHub repositories:
+
+- Frontend: `Paul-M-Kallarackal/corvin-demo-app-frontend`
+- Backend: `Paul-M-Kallarackal/corvin-demo-app-backend`
+
+Their source seeds live under `demo-repositories/` in this workspace. Corvin's
+public setup flow loads these repositories when GitHub is connected, then
+generates `exec.md` from the frontend and backend selections.
+
 ## Deploy
 
 The project is Vercel-ready with `vercel.json` and an API catch-all function in `api/[...path].ts`.
@@ -88,25 +99,34 @@ Example shape:
 # exec.md
 
 ## Purpose
-Run Acme Checkout Workspace locally for PM review.
+Run Corvin Demo App locally for PM review.
 
 ## Repositories
 ```yaml
 repositories:
-  - id: web
-    repo: acme/web
+  - id: frontend
+    repo: Paul-M-Kallarackal/corvin-demo-app-frontend
     role: frontend
-    install: pnpm install
-    dev: pnpm dev --host 0.0.0.0
+    install: npm install
+    dev: npm run dev -- --host 0.0.0.0
     health: http://localhost:5173
+  - id: backend
+    repo: Paul-M-Kallarackal/corvin-demo-app-backend
+    role: backend
+    install: npm install
+    dev: npm run dev
+    health: http://localhost:3000/health
 ```
 
 ## Environment
 ```yaml
 global:
-  - name: DATABASE_URL
+  - name: VITE_API_BASE_URL
     required: true
-    description: Local Postgres connection string.
+    description: Local backend API URL.
+  - name: PORT
+    required: true
+    description: Local backend API port.
 perRepo: {}
 ```
 
@@ -127,7 +147,7 @@ All AI routing uses OpenAI. The current demo shows the intended routing policy:
 ## Demo Story
 
 1. The product manager `Maya Rao` is visible in the dashboard.
-2. Show the engineering execution packet as already complete for the Acme Checkout workspace.
+2. Show the engineering execution packet as already complete for the Corvin Demo App workspace.
 3. Show `exec.md` as the editable engineering setup file for local run packaging.
 4. Maya asks to change checkout copy.
 5. Corvin routes the request through OpenAI-only agents.
@@ -149,7 +169,7 @@ Message intake:
 ```bash
 curl -X POST "http://127.0.0.1:8787/webhooks/whatsapp" \
   -H "Content-Type: application/json" \
-  -d '{"entry":[{"changes":[{"value":{"messages":[{"from":"15550001111","id":"wamid.demo","type":"text","text":{"body":"Corvin acme-checkout: replace hero copy on checkout page"}}]}}]}]}'
+  -d '{"entry":[{"changes":[{"value":{"messages":[{"from":"15550001111","id":"wamid.demo","type":"text","text":{"body":"Corvin corvin-demo-app: replace hero copy on checkout page"}}]}}]}]}'
 ```
 
 ## GitHub Entry Point
@@ -174,6 +194,10 @@ Generate the GitHub App authorization URL:
 ```bash
 curl "http://127.0.0.1:8787/api/integrations/github/authorize"
 ```
+
+When GitHub App credentials are not configured, the local demo falls back to the
+public `corvin-demo-app-frontend` and `corvin-demo-app-backend` repositories so
+the setup screen can still request both code repositories and generate `exec.md`.
 
 ## OpenAI-Only Change Planning
 

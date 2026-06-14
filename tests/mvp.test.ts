@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  createCorvinDemoBlueprint,
+  createDemoModeState,
+} from "../src/shared/demo";
+import {
   buildGitHubAuthorizeUrl,
   buildExecRunPlan,
   buildJobWorkspacePlan,
@@ -588,5 +592,82 @@ Missing essentials should block save.
     expect(promoted.production.headline).toBe("Checkout that explains every charge before you pay.");
     expect(promoted.production.status).toBe("live");
     expect(promoted.auditTrail.at(-1)).toContain("production");
+  });
+});
+
+describe("demo mode workflow", () => {
+  it("defines the public Corvin demo app as frontend and backend repositories", () => {
+    const blueprint = createCorvinDemoBlueprint("Paul-M-Kallarackal");
+
+    expect(blueprint.id).toBe("corvin-demo-app");
+    expect(blueprint.repositories.map((repository) => repository.id)).toEqual([
+      "frontend",
+      "backend",
+    ]);
+    expect(blueprint.repositories.map((repository) => repository.sourceRef)).toEqual([
+      "synced-repo://Paul-M-Kallarackal/corvin-demo-app-frontend",
+      "synced-repo://Paul-M-Kallarackal/corvin-demo-app-backend",
+    ]);
+    expect(blueprint.services.map((service) => service.repositoryId)).toEqual([
+      "frontend",
+      "backend",
+    ]);
+  });
+
+  it("creates a no-login connected walkthrough with a completed job", () => {
+    const state = createDemoModeState();
+    const job = state.jobs[0];
+    const parsedExec = parseExecMarkdown(state.exec.markdown);
+
+    expect(parsedExec.ok).toBe(true);
+    expect(parsedExec.document?.repositories.map((repository) => repository.id)).toEqual([
+      "frontend",
+      "backend",
+    ]);
+    expect(state.integrations.map((integration) => integration.status)).toEqual([
+      "connected",
+      "connected",
+      "ready",
+    ]);
+    expect(state.exec.exists).toBe(true);
+    expect(state.exec.validation.ready).toBe(true);
+    expect(state.requests[0]).toEqual(
+      expect.objectContaining({
+        title: "Change checkout headline",
+        status: "ready-for-context",
+      }),
+    );
+    expect(job).toEqual(
+      expect.objectContaining({
+        status: "pr-open",
+        currentAction: "Demo complete",
+      }),
+    );
+    expect(job.changedFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ repositoryId: "frontend", path: "src/App.tsx", status: "modified" }),
+        expect.objectContaining({ repositoryId: "backend", path: "docs/checkout-copy.md", status: "added" }),
+      ]),
+    );
+    expect(job.reviewIterations.length).toBeGreaterThanOrEqual(3);
+    expect(job.pullRequests[0].url).toContain("github.com/Paul-M-Kallarackal/corvin-demo-app-frontend/pull/");
+    expect(state.logs).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("exec.md validated"),
+        expect.stringContaining("opened pull request"),
+      ]),
+    );
+  });
+
+  it("shows the finished local, staging, and production review path", () => {
+    const state = createDemoModeState();
+
+    expect(state.deployment.local.status).toBe("ready");
+    expect(state.deployment.staging.status).toBe("ready");
+    expect(state.deployment.production.status).toBe("live");
+    expect(state.deployment.local.headline).toBe("Checkout that explains every charge before you pay.");
+    expect(state.deployment.production.headline).toBe("Checkout that explains every charge before you pay.");
+    expect(state.deployment.auditTrail.at(-1)).toContain("production");
+    expect(state.steps.every((step) => step.status === "succeeded")).toBe(true);
   });
 });
