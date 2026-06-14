@@ -27,7 +27,16 @@ import {
   validateBlueprint,
 } from "../src/shared/mvp";
 import { createInitialState } from "../src/shared/demo";
-import type { ExecDocument, ExecSetupState, JobChangedFile, JobRunState, MvpState, ServiceConfig, WorkspaceBlueprint } from "../src/shared/types";
+import type {
+  ExecDocument,
+  ExecSetupState,
+  JobChangedFile,
+  JobFileEditPlan,
+  JobRunState,
+  MvpState,
+  ServiceConfig,
+  WorkspaceBlueprint,
+} from "../src/shared/types";
 import type { WhatsAppIntake } from "../src/shared/types";
 import {
   getWhatsAppSnapshot,
@@ -39,6 +48,8 @@ import {
 export const app = express();
 export const state: MvpState = createInitialState();
 const execFileUrl = new URL("../exec.md", import.meta.url);
+const corvinDataDirUrl = new URL("../.corvin/", import.meta.url);
+const githubAuthFileUrl = new URL("../.corvin/github-auth.json", import.meta.url);
 
 const openAIModel = process.env.OPENAI_MODEL ?? "gpt-5.5";
 const openAIClient = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -54,6 +65,14 @@ type GitHubConnection = {
   accessToken?: string;
 };
 
+type PersistedGitHubConnection = {
+  login: string;
+  name?: string;
+  scopes: string[];
+  connectedAt: string;
+  accessToken: string;
+};
+
 const githubConnection: GitHubConnection = {
   connected: false,
   scopes: [],
@@ -66,6 +85,7 @@ state.openAI = {
   configured: Boolean(openAIClient),
   routing: createOpenAIRoutingPlan(),
 };
+restoreGitHubConnection();
 syncExecFromDisk();
 
 app.use(cors());
@@ -148,6 +168,11 @@ app.get("/api/integrations/github/authorize", (request, response) => {
 });
 
 app.get("/api/integrations/github/status", (_request, response) => {
+  const credentialSource = githubConnection.accessToken
+    ? "oauth"
+    : process.env.GITHUB_TOKEN || process.env.GH_TOKEN
+      ? "env"
+      : "missing";
   response.json({
     connected: githubConnection.connected,
     login: githubConnection.login,
@@ -155,6 +180,8 @@ app.get("/api/integrations/github/status", (_request, response) => {
     scopes: githubConnection.scopes,
     connectedAt: githubConnection.connectedAt,
     error: githubConnection.error,
+    hasToken: credentialSource !== "missing",
+    credentialSource,
   });
 });
 
@@ -203,6 +230,7 @@ app.get("/api/integrations/github/callback", async (request, response) => {
     githubConnection.connectedAt = new Date().toISOString();
     githubConnection.error = undefined;
     githubConnection.accessToken = token.accessToken;
+    persistGitHubConnection();
 
     upsertIntegration("github", "connected", `Connected as ${profile.login}`);
     updateStep("github-sync", "succeeded");
@@ -658,6 +686,47 @@ async function fetchGitHubProfile(accessToken: string) {
   return profile;
 }
 
+function restoreGitHubConnection() {
+  if (!existsSync(githubAuthFileUrl)) return;
+
+  try {
+    const persisted = JSON.parse(readFileSync(githubAuthFileUrl, "utf8")) as Partial<PersistedGitHubConnection>;
+    if (!persisted.accessToken || !persisted.login || !persisted.connectedAt) {
+      return;
+    }
+
+    githubConnection.connected = true;
+    githubConnection.login = persisted.login;
+    githubConnection.name = persisted.name;
+    githubConnection.scopes = persisted.scopes ?? [];
+    githubConnection.connectedAt = persisted.connectedAt;
+    githubConnection.accessToken = persisted.accessToken;
+    githubConnection.error = undefined;
+    upsertIntegration("github", "connected", `Connected as ${persisted.login}`);
+    updateStep("github-sync", "succeeded");
+    updateFinalEntryPointStep();
+    state.logs.unshift(`[github] restored OAuth connection for ${persisted.login}`);
+  } catch (error) {
+    githubConnection.connected = false;
+    githubConnection.error = error instanceof Error ? error.message : "Could not restore GitHub OAuth connection";
+    state.logs.unshift(`[github] persisted OAuth restore failed: ${githubConnection.error}`);
+  }
+}
+
+function persistGitHubConnection() {
+  if (!githubConnection.accessToken || !githubConnection.login || !githubConnection.connectedAt) return;
+
+  mkdirSync(corvinDataDirUrl, { recursive: true });
+  const persisted: PersistedGitHubConnection = {
+    login: githubConnection.login,
+    name: githubConnection.name,
+    scopes: githubConnection.scopes,
+    connectedAt: githubConnection.connectedAt,
+    accessToken: githubConnection.accessToken,
+  };
+  writeFileSync(githubAuthFileUrl, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+}
+
 function markGitHubFailed(message: string) {
   githubConnection.connected = false;
   githubConnection.error = message;
@@ -706,6 +775,7 @@ function createPlannedJob(request: MvpState["requests"][number], document: ExecD
     logs: [`[job] planned ${plan.repositories.length} repositories for ${request.id}`],
     changedFiles: [],
     pullRequests: [],
+    reviewIterations: [],
     startedAt: now,
     updatedAt: now,
   };
@@ -900,8 +970,17 @@ async function applyJobChange(job: JobRunState, request: MvpState["requests"][nu
   job.status = "running";
   job.currentAction = feedback.trim() ? "Applying requested changes" : "Applying initial change";
   job.updatedAt = new Date().toISOString();
-  const editPlan = createJobFileEditPlan(`${request.body}\n${feedback}`);
+  const editPlan = await createJobEditPlanForRepository(repository.localPath, request, feedback);
   const editedPath = applyRepositoryEdit(repository.localPath, editPlan);
+  job.reviewIterations.unshift({
+    id: `review-${Date.now()}`,
+    model: editPlan.model,
+    mode: editPlan.mode,
+    feedback: feedback.trim() || "Initial PM request",
+    summary: editPlan.summary,
+    targetFile: editedPath ? toRepositoryRelativePath(repository.localPath, editedPath) : editPlan.targetFile,
+    createdAt: new Date().toISOString(),
+  });
   if (editedPath) {
     job.logs.unshift(`[change] edited ${editedPath}`);
     state.logs.unshift(`[change] edited ${editedPath}`);
@@ -921,6 +1000,12 @@ async function applyJobChange(job: JobRunState, request: MvpState["requests"][nu
   job.currentAction = "Waiting for approval";
   job.updatedAt = new Date().toISOString();
 }
+
+type JobEditPlanWithReview = JobFileEditPlan & {
+  model: string;
+  mode: "live" | "fallback";
+  targetFile?: string;
+};
 
 function pickWritableRepository(job: JobRunState) {
   return (
@@ -949,7 +1034,88 @@ function renderJobChangeFile(job: JobRunState, request: MvpState["requests"][num
   ].filter((line, index, lines) => line || lines[index - 1]).join("\n");
 }
 
-function applyRepositoryEdit(rootPath: string, editPlan: ReturnType<typeof createJobFileEditPlan>) {
+async function createJobEditPlanForRepository(
+  rootPath: string,
+  request: MvpState["requests"][number],
+  feedback: string,
+): Promise<JobEditPlanWithReview> {
+  const fallback = createJobFileEditPlan(`${request.body}\n${feedback}`);
+  const fallbackPlan: JobEditPlanWithReview = {
+    ...fallback,
+    model: openAIModel,
+    mode: "fallback",
+  };
+  if (!openAIClient) {
+    return fallbackPlan;
+  }
+
+  const candidates = findEditableFiles(rootPath, fallback.targetFileHints).slice(0, 8);
+  if (candidates.length === 0) {
+    return fallbackPlan;
+  }
+
+  try {
+    const files = candidates.map((filePath) => ({
+      path: toRepositoryRelativePath(rootPath, filePath),
+      snippet: readFileSync(filePath, "utf8").slice(0, 3_000),
+    }));
+    const result = await openAIClient.responses.create({
+      model: openAIModel,
+      input: [
+        {
+          role: "developer",
+          content: [
+            "You are Corvin's code review loop planner.",
+            "Choose one editable file from the provided list and return strict JSON only.",
+            "The JSON shape is {\"targetFile\":\"relative/path\",\"replacementText\":\"visible copy\",\"summary\":\"one sentence\"}.",
+            "replacementText should be concise product-facing copy that directly addresses the PM request or review feedback.",
+            "Do not invent paths. Choose only a targetFile from the candidate list.",
+          ].join(" "),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            pmRequest: request.body,
+            reviewFeedback: feedback,
+            fallback,
+            files,
+          }),
+        },
+      ],
+    });
+    const parsed = parseJsonObject(result.output_text);
+    const targetFile = typeof parsed?.targetFile === "string" ? parsed.targetFile : "";
+    const replacementText = typeof parsed?.replacementText === "string" ? parsed.replacementText.trim() : "";
+    const summary = typeof parsed?.summary === "string" ? parsed.summary.trim() : "";
+    if (!targetFile || !replacementText || !files.some((file) => file.path === targetFile)) {
+      throw new Error("GPT review planner returned an invalid target or replacement");
+    }
+    return {
+      ...fallback,
+      targetFileHints: [targetFile, ...fallback.targetFileHints],
+      replacementText,
+      summary: summary || fallback.summary,
+      model: openAIModel,
+      mode: "live",
+      targetFile,
+    };
+  } catch (error) {
+    state.logs.unshift(`[openai] GPT review loop fell back: ${error instanceof Error ? error.message : "invalid response"}`);
+    return fallbackPlan;
+  }
+}
+
+function parseJsonObject(value: string) {
+  const match = value.trim().match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[0]) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function applyRepositoryEdit(rootPath: string, editPlan: JobFileEditPlan) {
   const candidates = findEditableFiles(rootPath, editPlan.targetFileHints);
   for (const filePath of candidates) {
     const original = readFileSync(filePath, "utf8");
@@ -960,6 +1126,11 @@ function applyRepositoryEdit(rootPath: string, editPlan: ReturnType<typeof creat
     }
   }
   return null;
+}
+
+function toRepositoryRelativePath(rootPath: string, filePath: string) {
+  const normalizedRoot = rootPath.replace(/\\/g, "/").replace(/\/$/, "");
+  return filePath.replace(/\\/g, "/").replace(`${normalizedRoot}/`, "");
 }
 
 function findEditableFiles(rootPath: string, hints: string[]) {
@@ -1001,15 +1172,26 @@ function applyCopyEdit(source: string, replacementText: string) {
     return source.replace(headingTag, `$1${replacementText}$3`);
   }
 
+  const titleTag = /(<title>)([^<]{4,120})(<\/title>)/i;
+  if (titleTag.test(source)) {
+    return source.replace(titleTag, `$1${replacementText}$3`);
+  }
+
+  const exportedTitle = /(title|headline|heading)(:\s*["'`])([^"'`]{4,160})(["'`])/i;
+  if (exportedTitle.test(source)) {
+    return source.replace(exportedTitle, `$1$2${replacementText}$4`);
+  }
+
   return source;
 }
 
 function updateJobReviewPackage(job: JobRunState, request: MvpState["requests"][number], feedback: string) {
   const changed = job.changedFiles.map((file) => `${file.repositoryId}/${file.path}`).join(", ");
   const previousScreenshots = job.reviewPackage?.screenshots ?? [];
+  const latestReview = job.reviewIterations[0];
   job.reviewPackage = {
     wrong: request.body.trim() || "The request did not include enough detail.",
-    fixed: changed ? `Changed files: ${changed}.` : "Applied the requested repository change.",
+    fixed: latestReview?.summary ?? (changed ? `Changed files: ${changed}.` : "Applied the requested repository change."),
     revised: feedback.trim() || "No revision feedback has been applied yet.",
     screenshots: previousScreenshots,
     updatedAt: new Date().toISOString(),
@@ -1203,6 +1385,13 @@ function renderPullRequestBody(job: JobRunState, repositoryId: string) {
   const screenshots = job.reviewPackage?.screenshots
     .map((screenshot) => `- ${screenshot.status}: ${screenshot.label} (${screenshot.url})`)
     .join("\n");
+  const reviewLoop = job.reviewIterations
+    .slice(0, 5)
+    .map((iteration) => {
+      const target = iteration.targetFile ? `, target: ${iteration.targetFile}` : "";
+      return `- ${iteration.mode} ${iteration.model}${target}: ${iteration.summary}`;
+    })
+    .join("\n");
   return [
     `Corvin job: ${job.id}`,
     "",
@@ -1214,6 +1403,9 @@ function renderPullRequestBody(job: JobRunState, repositoryId: string) {
     "",
     "## What was revised",
     job.reviewPackage?.revised ?? "No revision feedback was applied.",
+    "",
+    "## GPT review loop",
+    reviewLoop || "- No GPT review iterations were recorded.",
     "",
     "## Changed files",
     files || "- No files captured",

@@ -179,6 +179,16 @@ export type JobReviewPackage = {
   updatedAt: string;
 };
 
+export type JobReviewIteration = {
+  id: string;
+  model: string;
+  mode: "live" | "fallback";
+  feedback: string;
+  summary: string;
+  targetFile?: string;
+  createdAt: string;
+};
+
 export type JobRunStatus =
   | "planned"
   | "blocked"
@@ -201,6 +211,7 @@ export type JobRunState = {
   changedFiles: JobChangedFile[];
   diff?: string;
   pullRequests: JobPullRequest[];
+  reviewIterations: JobReviewIteration[];
   reviewPackage?: JobReviewPackage;
   startedAt: string;
   updatedAt: string;

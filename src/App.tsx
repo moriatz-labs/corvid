@@ -1158,6 +1158,24 @@ function JobSurface({
                       ))}
                     </div>
                   ) : null}
+                  {latestJob.reviewIterations.length > 0 ? (
+                    <div className="mt-3 rounded-md bg-muted p-2">
+                      <p className="font-primary text-xs font-medium text-foreground">GPT review loop</p>
+                      <div className="mt-2 grid gap-2">
+                        {latestJob.reviewIterations.slice(0, 3).map((iteration) => (
+                          <div key={iteration.id} className="font-body text-xs text-muted-foreground">
+                            <p>
+                              <span className="text-foreground">{iteration.mode}</span> {iteration.model}
+                            </p>
+                            <p>{iteration.summary}</p>
+                            {iteration.targetFile ? (
+                              <p className="break-all font-mono text-[11px]">{iteration.targetFile}</p>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               {latestJob.pullRequests.length > 0 ? (
