@@ -1,3 +1,4 @@
+import "./env";
 import cors from "cors";
 import express from "express";
 import OpenAI from "openai";
@@ -28,6 +29,21 @@ export const state: MvpState = createInitialState();
 
 const openAIModel = process.env.OPENAI_MODEL ?? "gpt-5.5";
 const openAIClient = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const githubAppOAuthState = process.env.GITHUB_APP_OAUTH_STATE ?? process.env.GITHUB_OAUTH_STATE ?? "corvin-local-demo";
+
+type GitHubConnection = {
+  connected: boolean;
+  login?: string;
+  name?: string;
+  scopes: string[];
+  connectedAt?: string;
+  error?: string;
+};
+
+const githubConnection: GitHubConnection = {
+  connected: false,
+  scopes: [],
+};
 
 state.openAI = {
   ...state.openAI,
@@ -42,27 +58,22 @@ app.get("/api/state", (_request, response) => {
   response.json(state);
 });
 
-app.post("/api/integrations/github/sync-demo", (_request, response) => {
-  upsertIntegration("github", "connected", "Demo repository sync is connected");
-  updateStep("github-sync", "succeeded");
-  updateFinalEntryPointStep();
-  state.logs.unshift("[github] demo repository sync connected");
-  response.json(state);
-});
-
 app.get("/api/integrations/github/authorize", (request, response) => {
-  const clientId = process.env.GITHUB_CLIENT_ID;
+  const clientId = getGitHubAppClientId();
+  const clientSecret = getGitHubAppClientSecret();
   const protocol = String(request.headers["x-forwarded-proto"] ?? request.protocol ?? "http").split(",")[0];
   const host = request.headers.host ?? `localhost:${process.env.CORVIN_API_PORT ?? 8787}`;
   const redirectUri =
     process.env.GITHUB_REDIRECT_URI ?? `${protocol}://${host}/api/integrations/github/callback`;
-  const oauthState = process.env.GITHUB_OAUTH_STATE ?? "corvin-local-demo";
 
-  if (!clientId) {
+  if (!clientId || !clientSecret) {
+    githubConnection.connected = false;
+    githubConnection.error = "GitHub App OAuth is not configured";
+    upsertIntegration("github", "needs-config", "Set GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET to connect GitHub");
+    updateStep("github-sync", "pending");
     response.json({
       configured: false,
-      message: "Set GITHUB_CLIENT_ID to generate a live GitHub OAuth URL.",
-      demoAction: "/api/integrations/github/sync-demo",
+      message: "Set GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET from your GitHub App settings.",
     });
     return;
   }
@@ -72,16 +83,71 @@ app.get("/api/integrations/github/authorize", (request, response) => {
     url: buildGitHubAuthorizeUrl({
       clientId,
       redirectUri,
-      state: oauthState,
+      state: githubAppOAuthState,
       scopes: ["repo", "read:org"],
     }),
   });
 });
 
-app.get("/api/integrations/github/callback", (request, response) => {
-  upsertIntegration("github", "connected", "GitHub OAuth callback received");
-  state.logs.unshift(`[github] callback received with code=${String(request.query.code ?? "missing")}`);
-  response.type("html").send("<p>GitHub connected. You can return to Corvin.</p>");
+app.get("/api/integrations/github/status", (_request, response) => {
+  response.json(githubConnection);
+});
+
+app.get("/api/integrations/github/callback", async (request, response) => {
+  const code = String(request.query.code ?? "");
+  const returnedState = String(request.query.state ?? "");
+  const error = request.query.error ? String(request.query.error) : "";
+
+  if (error) {
+    markGitHubFailed(`GitHub App OAuth failed: ${error}`);
+    response.type("html").send(renderOAuthResult("GitHub connection failed", error));
+    return;
+  }
+
+  if (!code || returnedState !== githubAppOAuthState) {
+    markGitHubFailed("GitHub App OAuth callback failed state validation");
+    response.status(400).type("html").send(renderOAuthResult("GitHub connection failed", "Invalid OAuth state."));
+    return;
+  }
+
+  const clientId = getGitHubAppClientId();
+  const clientSecret = getGitHubAppClientSecret();
+  const protocol = String(request.headers["x-forwarded-proto"] ?? request.protocol ?? "http").split(",")[0];
+  const host = request.headers.host ?? `localhost:${process.env.CORVIN_API_PORT ?? 8787}`;
+  const redirectUri =
+    process.env.GITHUB_REDIRECT_URI ?? `${protocol}://${host}/api/integrations/github/callback`;
+
+  if (!clientId || !clientSecret) {
+    markGitHubFailed("GitHub App OAuth credentials are not configured");
+    response.status(500).type("html").send(renderOAuthResult("GitHub connection failed", "OAuth credentials are missing."));
+    return;
+  }
+
+  try {
+    const token = await exchangeGitHubCode({
+      clientId,
+      clientSecret,
+      code,
+      redirectUri,
+    });
+    const profile = await fetchGitHubProfile(token.accessToken);
+    githubConnection.connected = true;
+    githubConnection.login = profile.login;
+    githubConnection.name = profile.name ?? undefined;
+    githubConnection.scopes = token.scopes;
+    githubConnection.connectedAt = new Date().toISOString();
+    githubConnection.error = undefined;
+
+    upsertIntegration("github", "connected", `Connected as ${profile.login}`);
+    updateStep("github-sync", "succeeded");
+    updateFinalEntryPointStep();
+    state.logs.unshift(`[github] connected as ${profile.login}`);
+    response.type("html").send(renderOAuthResult("GitHub connected", "You can close this window and return to Corvin."));
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : "GitHub App OAuth failed";
+    markGitHubFailed(message);
+    response.status(502).type("html").send(renderOAuthResult("GitHub connection failed", message));
+  }
 });
 
 app.get("/api/integrations/whatsapp/connect", async (request, response) => {
@@ -284,6 +350,111 @@ function upsertIntegration(id: "whatsapp" | "github" | "docker", status: MvpStat
   state.integrations = state.integrations.map((integration) =>
     integration.id === id ? { ...integration, status, detail } : integration,
   );
+}
+
+function getGitHubAppClientId() {
+  return process.env.GITHUB_APP_CLIENT_ID ?? process.env.GITHUB_CLIENT_ID;
+}
+
+function getGitHubAppClientSecret() {
+  return process.env.GITHUB_APP_CLIENT_SECRET ?? process.env.GITHUB_CLIENT_SECRET;
+}
+
+async function exchangeGitHubCode(input: {
+  clientId: string;
+  clientSecret: string;
+  code: string;
+  redirectUri: string;
+}) {
+  const response = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      client_id: input.clientId,
+      client_secret: input.clientSecret,
+      code: input.code,
+      redirect_uri: input.redirectUri,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub App token exchange failed with ${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    access_token?: string;
+    scope?: string;
+    error?: string;
+    error_description?: string;
+  };
+
+  if (payload.error || !payload.access_token) {
+    throw new Error(payload.error_description ?? payload.error ?? "GitHub App did not return an access token");
+  }
+
+  return {
+    accessToken: payload.access_token,
+    scopes: payload.scope ? payload.scope.split(",").map((scope) => scope.trim()).filter(Boolean) : [],
+  };
+}
+
+async function fetchGitHubProfile(accessToken: string) {
+  const response = await fetch("https://api.github.com/user", {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${accessToken}`,
+      "User-Agent": "corvin-local-agent",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub profile request failed with ${response.status}`);
+  }
+
+  const profile = (await response.json()) as { login?: string; name?: string | null };
+  if (!profile.login) {
+    throw new Error("GitHub profile response did not include a login");
+  }
+  return profile;
+}
+
+function markGitHubFailed(message: string) {
+  githubConnection.connected = false;
+  githubConnection.error = message;
+  upsertIntegration("github", "failed", message);
+  state.logs.unshift(`[github] ${message}`);
+}
+
+function renderOAuthResult(title: string, message: string) {
+  return [
+    "<!doctype html>",
+    "<html>",
+    "<head>",
+    '<meta charset="utf-8" />',
+    `<title>${escapeHtml(title)}</title>`,
+    '<meta name="viewport" content="width=device-width,initial-scale=1" />',
+    "<style>body{font-family:system-ui,sans-serif;margin:40px;color:#1f1f23}p{color:#666;line-height:1.5}</style>",
+    "</head>",
+    "<body>",
+    `<h1>${escapeHtml(title)}</h1>`,
+    `<p>${escapeHtml(message)}</p>`,
+    "<script>setTimeout(()=>window.close(),1200)</script>",
+    "</body>",
+    "</html>",
+  ].join("");
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function captureWhatsAppIntake(intake: WhatsAppIntake) {

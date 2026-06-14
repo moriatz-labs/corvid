@@ -75,7 +75,7 @@ export const initialIntegrations: Integration[] = [
     id: "github",
     label: "GitHub",
     status: "needs-config",
-    detail: "OAuth URL can be generated when GITHUB_CLIENT_ID is set",
+    detail: "Set GitHub App client ID and secret to connect",
   },
   {
     id: "docker",
@@ -95,10 +95,10 @@ export const initialSteps: BlueprintStep[] = [
   },
   {
     id: "github-sync",
-    label: "Connect GitHub repository sync",
+    label: "Connect GitHub App",
     kind: "deterministic",
     status: "pending",
-    summary: "OAuth URL generation and demo repository sync are available",
+    summary: "GitHub App web authorization is available when app credentials are set",
   },
   {
     id: "blueprint",

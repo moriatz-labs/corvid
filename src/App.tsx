@@ -44,6 +44,7 @@ export default function App() {
   const [apiAvailable, setApiAvailable] = useState(false);
   const [whatsAppConnect, setWhatsAppConnect] = useState<WhatsAppConnect | null>(null);
   const [whatsAppQrOpen, setWhatsAppQrOpen] = useState(false);
+  const [githubPolling, setGithubPolling] = useState(false);
 
   const completedSteps = useMemo(
     () => state.steps.filter((step) => step.status === "succeeded").length,
@@ -121,16 +122,37 @@ export default function App() {
 
   async function connectGitHub() {
     await runAction("github", async () => {
-      const response = await api<{ configured: boolean; url?: string; demoAction?: string }>(
+      const response = await api<{ configured: boolean; url?: string; message?: string }>(
         "/api/integrations/github/authorize",
       );
       if (response.configured && response.url) {
         window.open(response.url, "_blank", "noopener,noreferrer");
+        setGithubPolling(true);
         return response;
       }
-      await api("/api/integrations/github/sync-demo", { method: "POST" });
+      window.alert(response.message ?? "GitHub App OAuth is not configured.");
       return response;
     });
+  }
+
+  useEffect(() => {
+    if (!githubPolling) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void refreshGitHubStatus();
+    }, 2000);
+
+    return () => window.clearInterval(timer);
+  }, [githubPolling]);
+
+  async function refreshGitHubStatus() {
+    const status = await api<{ connected: boolean; error?: string }>("/api/integrations/github/status");
+    if (status.connected || status.error) {
+      setGithubPolling(false);
+      await refreshState();
+    }
   }
 
   async function runWorkspace() {
@@ -261,7 +283,7 @@ export default function App() {
             <section className="grid gap-6">
               <IntegrationStrip
                 integrations={state.integrations}
-                loading={loading}
+                loading={githubPolling ? "github" : loading}
                 onWhatsApp={() => void connectWhatsApp()}
                 onGitHub={() => void connectGitHub()}
               />
