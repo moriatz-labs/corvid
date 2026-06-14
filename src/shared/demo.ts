@@ -1,6 +1,9 @@
 import {
   createDeploymentDemoState,
+  createEmptyExecSetup,
+  createExecDraftFromBlueprint,
   createOpenAIChangePlan,
+  createOpenAIRoutingPlan,
   createRequestFromWhatsAppMessage,
   generateComposeFile,
   validateBlueprint,
@@ -10,6 +13,48 @@ import type { BlueprintStep, Integration, MvpState, WorkspaceBlueprint } from ".
 export const demoBlueprint: WorkspaceBlueprint = {
   id: "acme-checkout",
   name: "Acme Checkout Workspace",
+  setupStatus: "ready",
+  pmRunCommand: "npx corvin run acme-checkout",
+  executionScriptSummary:
+    "Engineering supplied the execution script; Corvin agents resolve repo sync, branch alignment, env checks, startup order, and health checks.",
+  engineeringIntake: [
+    {
+      id: "repository-map",
+      label: "Repository names and ownership",
+      detail: "Frontend, API, and worker repositories are listed with owners and source refs.",
+      status: "provided",
+    },
+    {
+      id: "repository-purpose",
+      label: "What each repository does",
+      detail: "Each repo has a short responsibility statement so agents know where changes belong.",
+      status: "provided",
+    },
+    {
+      id: "startup-functions",
+      label: "Startup functions and commands",
+      detail: "Install, dev, seed, worker, migration, and health-check commands are allowlisted.",
+      status: "provided",
+    },
+    {
+      id: "branch-contract",
+      label: "Cross-repo branch contract",
+      detail: "Branch coupling rules explain when frontend, API, and worker branches must match.",
+      status: "provided",
+    },
+    {
+      id: "service-connections",
+      label: "How services connect coherently",
+      detail: "Ports, env vars, databases, queues, webhooks, and API base URLs are declared.",
+      status: "provided",
+    },
+    {
+      id: "missing-edge-cases",
+      label: "Missing pieces and edge cases",
+      detail: "Known setup gaps, optional services, seed data, and laptop-specific risks are recorded.",
+      status: "provided",
+    },
+  ],
   repositories: [
     {
       id: "web",
@@ -17,6 +62,9 @@ export const demoBlueprint: WorkspaceBlueprint = {
       sourceRef: "synced-repo://acme/web",
       defaultBranch: "main",
       localPath: "repos/web",
+      purpose: "Customer checkout and PM-visible product surface.",
+      startupCommand: "pnpm install && pnpm dev --host 0.0.0.0",
+      branchCoupling: "Use the same feature branch as api when checkout contract changes.",
     },
     {
       id: "api",
@@ -24,6 +72,9 @@ export const demoBlueprint: WorkspaceBlueprint = {
       sourceRef: "synced-repo://acme/api",
       defaultBranch: "main",
       localPath: "repos/api",
+      purpose: "Checkout pricing, plan metadata, and payment session API.",
+      startupCommand: "pnpm install && pnpm dev",
+      branchCoupling: "Must match web branch when response schema changes.",
     },
     {
       id: "worker",
@@ -31,6 +82,9 @@ export const demoBlueprint: WorkspaceBlueprint = {
       sourceRef: "synced-repo://acme/worker",
       defaultBranch: "main",
       localPath: "repos/worker",
+      purpose: "Async receipt, webhook, and analytics processing.",
+      startupCommand: "pnpm install && pnpm worker:dev",
+      branchCoupling: "Can stay on main unless checkout events change.",
     },
   ],
   services: [
@@ -95,38 +149,38 @@ export const initialSteps: BlueprintStep[] = [
   },
   {
     id: "github-sync",
-    label: "Connect GitHub repository sync",
+    label: "Resolve repository metadata",
     kind: "deterministic",
     status: "pending",
-    summary: "OAuth URL generation and demo repository sync are available",
+    summary: "Agents receive repository metadata from the GitHub sync layer",
   },
   {
     id: "blueprint",
-    label: "Load workspace blueprint",
+    label: "Load engineering execution packet",
     kind: "deterministic",
     status: "succeeded",
-    summary: "Acme Checkout blueprint loaded",
+    summary: "Repository map, startup functions, service contracts, and edge cases loaded",
   },
   {
     id: "validate",
-    label: "Validate setup",
+    label: "Validate agent-run setup",
     kind: "deterministic",
     status: "succeeded",
-    summary: "Repos, env, Docker, and ports checked",
+    summary: "Repos, env, Docker, branch coupling, and ports checked",
   },
   {
     id: "compose",
-    label: "Generate Compose file",
+    label: "Generate Compose from packet",
     kind: "deterministic",
     status: "succeeded",
-    summary: "Compose preview generated from blueprint",
+    summary: "Compose preview generated from engineering-authored execution script",
   },
   {
     id: "run",
-    label: "Run workspace",
+    label: "Run PM one-line command",
     kind: "deterministic",
     status: "running",
-    summary: "Demo runner simulates the safe Docker command set",
+    summary: "PM runs only npx corvin run acme-checkout or clicks the equivalent UI action",
   },
   {
     id: "status",
@@ -140,14 +194,14 @@ export const initialSteps: BlueprintStep[] = [
     label: "Capture PM request",
     kind: "agent",
     status: "pending",
-    summary: "Web and WhatsApp requests attach workspace context",
+    summary: "Requests are blocked unless the engineering execution packet is ready",
   },
   {
     id: "handoff",
-    label: "Prepare handoff context",
+    label: "Prepare agent handoff context",
     kind: "agent",
     status: "pending",
-    summary: "Request captures workspace, repo refs, and preview context",
+    summary: "Agents attach repo refs, branch rules, startup order, and preview context",
   },
   {
     id: "whatsapp-github-ready",
@@ -172,12 +226,14 @@ export function createInitialState(): MvpState {
 
   return {
     workspace: demoBlueprint,
+    exec: createEmptyExecSetup(createExecDraftFromBlueprint(demoBlueprint)),
     pm: {
       name: "Maya Rao",
       role: "Product Manager",
       team: "Acme Growth",
       avatarInitials: "MR",
-      currentIntent: "Change checkout copy, verify it on staging or locally, then push it to production.",
+      currentIntent:
+        "Ask for a product change after engineering has supplied the execution blueprint. Maya only runs the one-line command and reviews visible previews.",
     },
     integrations: initialIntegrations,
     validation,
@@ -185,7 +241,8 @@ export function createInitialState(): MvpState {
     steps: initialSteps,
     logs: [
       "[runner] safe mode enabled",
-      "[blueprint] loaded acme-checkout workspace",
+      "[engineering] execution packet complete for acme-checkout",
+      "[agents] resolved repositories, startup order, and service contracts",
       "[compose] generated corvin-acme-checkout services",
     ],
     requests: [
@@ -204,6 +261,7 @@ export function createInitialState(): MvpState {
       provider: "OpenAI",
       model: "gpt-5.5",
       configured: false,
+      routing: createOpenAIRoutingPlan(),
       lastPlan: createOpenAIChangePlan({
         requestBody: "Change the checkout headline to reduce confusion",
         pmName: "Maya Rao",

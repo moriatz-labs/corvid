@@ -8,6 +8,9 @@ export type RepositoryConfig = {
   sourceRef: string;
   defaultBranch: string;
   localPath: string;
+  purpose?: string;
+  startupCommand?: string;
+  branchCoupling?: string;
 };
 
 export type ServiceConfig = {
@@ -22,11 +25,94 @@ export type ServiceConfig = {
 export type WorkspaceBlueprint = {
   id: string;
   name: string;
+  setupStatus?: "needs-engineering" | "ready";
+  pmRunCommand?: string;
+  executionScriptSummary?: string;
+  engineeringIntake?: EngineeringIntakeItem[];
   repositories: RepositoryConfig[];
   services: ServiceConfig[];
   environment: {
     required: string[];
   };
+};
+
+export type ExecRepository = {
+  id: string;
+  repo: string;
+  role: string;
+  install: string;
+  dev: string;
+  health: string;
+};
+
+export type ExecEnvVar = {
+  name: string;
+  required: boolean;
+  description: string;
+};
+
+export type ExecEnvironment = {
+  global: ExecEnvVar[];
+  perRepo: Record<string, ExecEnvVar[]>;
+};
+
+export type ExecDocument = {
+  purpose: string;
+  repositories: ExecRepository[];
+  environment: ExecEnvironment;
+  localRunNotes: string;
+};
+
+export type ExecValidationIssue = {
+  id: string;
+  label: string;
+  detail: string;
+  severity: "error" | "warning";
+};
+
+export type ExecValidationResult = {
+  ready: boolean;
+  errors: ExecValidationIssue[];
+  warnings: ExecValidationIssue[];
+};
+
+export type ExecParseResult =
+  | {
+      ok: true;
+      document: ExecDocument;
+      errors: [];
+    }
+  | {
+      ok: false;
+      document?: undefined;
+      errors: ExecValidationIssue[];
+    };
+
+export type ExecRunPlan = {
+  summary: string;
+  commands: string[];
+  healthChecks: string[];
+  requiredEnv: string[];
+};
+
+export type ExecRunPlanResult = {
+  ready: boolean;
+  errors: ExecValidationIssue[];
+  plan?: ExecRunPlan;
+};
+
+export type ExecSetupState = {
+  exists: boolean;
+  markdown: string;
+  validation: ExecValidationResult;
+  runPlan?: ExecRunPlan;
+};
+
+export type EngineeringIntakeItem = {
+  id: string;
+  label: string;
+  detail: string;
+  status: "required" | "provided";
 };
 
 export type BlueprintCheck = {
@@ -83,6 +169,7 @@ export type Integration = {
 
 export type MvpState = {
   workspace: WorkspaceBlueprint;
+  exec: ExecSetupState;
   pm: PMProfile;
   integrations: Integration[];
   validation: ValidationResult;
@@ -108,6 +195,16 @@ export type OpenAIStatus = {
   model: string;
   configured: boolean;
   lastPlan?: OpenAIChangePlan;
+  routing: OpenAIRoute[];
+};
+
+export type OpenAIRoute = {
+  id: string;
+  label: string;
+  agent: string;
+  model: string;
+  reason: string;
+  taskClass: "routing" | "light" | "heavy" | "verification";
 };
 
 export type OpenAIChangePlan = {

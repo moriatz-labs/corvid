@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGitHubAuthorizeUrl,
+  buildExecRunPlan,
+  canCapturePMRequest,
+  createEmptyExecSetup,
   createDeploymentDemoState,
+  createExecDraftFromBlueprint,
   createOpenAIChangePlan,
   createRequestFromWhatsAppMessage,
+  parseExecMarkdown,
   promoteStagingToProduction,
+  renderExecMarkdown,
   stageRequestedChange,
   generateComposeFile,
   parseWhatsAppPayload,
+  validateExecDocument,
   validateBlueprint,
 } from "../src/shared/mvp";
 import type { WorkspaceBlueprint } from "../src/shared/types";
@@ -15,6 +22,17 @@ import type { WorkspaceBlueprint } from "../src/shared/types";
 const blueprint: WorkspaceBlueprint = {
   id: "acme-checkout",
   name: "Acme Checkout Workspace",
+  setupStatus: "ready",
+  pmRunCommand: "npx corvin run acme-checkout",
+  executionScriptSummary: "Engineering supplied the execution packet.",
+  engineeringIntake: [
+    {
+      id: "repository-map",
+      label: "Repository names and ownership",
+      detail: "Frontend and API repositories are listed.",
+      status: "provided",
+    },
+  ],
   repositories: [
     {
       id: "web",
@@ -22,6 +40,9 @@ const blueprint: WorkspaceBlueprint = {
       sourceRef: "synced-repo://acme/web",
       defaultBranch: "main",
       localPath: "repos/web",
+      purpose: "Checkout UI",
+      startupCommand: "pnpm dev",
+      branchCoupling: "Match api branch when contracts change.",
     },
     {
       id: "api",
@@ -29,6 +50,9 @@ const blueprint: WorkspaceBlueprint = {
       sourceRef: "synced-repo://acme/api",
       defaultBranch: "main",
       localPath: "repos/api",
+      purpose: "Checkout API",
+      startupCommand: "pnpm dev",
+      branchCoupling: "Match web branch when contracts change.",
     },
   ],
   services: [
@@ -55,6 +79,197 @@ const blueprint: WorkspaceBlueprint = {
 };
 
 describe("MVP core workflow", () => {
+  it("renders and parses exec.md with repositories, envs, and local run notes", () => {
+    const markdown = renderExecMarkdown({
+      purpose: "Run Acme Checkout locally for PM review.",
+      repositories: [
+        {
+          id: "web",
+          repo: "acme/web",
+          role: "frontend",
+          install: "pnpm install",
+          dev: "pnpm dev --host 0.0.0.0",
+          health: "http://localhost:5173",
+        },
+      ],
+      environment: {
+        global: [
+          {
+            name: "DATABASE_URL",
+            required: true,
+            description: "Local Postgres connection string.",
+          },
+        ],
+        perRepo: {
+          web: [
+            {
+              name: "API_BASE_URL",
+              required: true,
+              description: "Local API URL.",
+            },
+          ],
+        },
+      },
+      localRunNotes: "Seed data is optional for copy-only PM review.",
+    });
+
+    const parsed = parseExecMarkdown(markdown);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.document?.repositories[0]).toEqual(
+      expect.objectContaining({
+        id: "web",
+        install: "pnpm install",
+        dev: "pnpm dev --host 0.0.0.0",
+        health: "http://localhost:5173",
+      }),
+    );
+    expect(parsed.document?.environment.global[0].name).toBe("DATABASE_URL");
+    expect(parsed.document?.localRunNotes).toContain("Seed data");
+  });
+
+  it("blocks exec.md submission for missing essentials and invalid env names", () => {
+    const parsed = parseExecMarkdown(`# exec.md
+
+## Purpose
+Run a broken workspace.
+
+## Repositories
+\`\`\`yaml
+repositories:
+  - id: web
+    repo: acme/web
+    role: frontend
+    install: pnpm install
+    dev: ""
+    health: not-a-url
+\`\`\`
+
+## Environment
+\`\`\`yaml
+global:
+  - name: bad-name
+    required: true
+    description: Bad env var.
+perRepo: {}
+\`\`\`
+
+## Local Run Notes
+Missing essentials should block save.
+`);
+
+    expect(parsed.ok).toBe(true);
+    const validation = validateExecDocument(parsed.document!, {});
+
+    expect(validation.ready).toBe(false);
+    expect(validation.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "repo-web-dev" }),
+        expect.objectContaining({ id: "repo-web-health-url" }),
+        expect.objectContaining({ id: "env-bad-name-name" }),
+      ]),
+    );
+  });
+
+  it("requires configured values for required exec.md env vars before local run", () => {
+    const parsed = parseExecMarkdown(renderExecMarkdown({
+      purpose: "Run checkout.",
+      repositories: [
+        {
+          id: "api",
+          repo: "acme/api",
+          role: "api",
+          install: "pnpm install",
+          dev: "pnpm dev",
+          health: "http://localhost:3000/health",
+        },
+      ],
+      environment: {
+        global: [
+          {
+            name: "DATABASE_URL",
+            required: true,
+            description: "Local Postgres connection string.",
+          },
+        ],
+        perRepo: {},
+      },
+      localRunNotes: "No notes.",
+    }));
+
+    const validation = validateExecDocument(parsed.document!, {});
+
+    expect(validation.ready).toBe(false);
+    expect(validation.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "env-DATABASE_URL-value" }),
+      ]),
+    );
+  });
+
+  it("builds a local run plan from exec.md when required env values are present", () => {
+    const parsed = parseExecMarkdown(renderExecMarkdown({
+      purpose: "Run checkout.",
+      repositories: [
+        {
+          id: "web",
+          repo: "acme/web",
+          role: "frontend",
+          install: "pnpm install",
+          dev: "pnpm dev",
+          health: "http://localhost:5173",
+        },
+      ],
+      environment: {
+        global: [
+          {
+            name: "DATABASE_URL",
+            required: true,
+            description: "Local Postgres connection string.",
+          },
+        ],
+        perRepo: {},
+      },
+      localRunNotes: "No notes.",
+    }));
+
+    const result = buildExecRunPlan(parsed.document!, {
+      DATABASE_URL: "postgres://postgres:corvin@localhost:5432/postgres",
+    });
+
+    expect(result.ready).toBe(true);
+    expect(result.plan?.commands).toEqual(["web: pnpm install && pnpm dev"]);
+    expect(result.plan?.healthChecks).toEqual(["web: http://localhost:5173"]);
+    expect(result.plan?.requiredEnv).toEqual(["DATABASE_URL"]);
+  });
+
+  it("creates an editable exec.md draft from the current workspace blueprint", () => {
+    const draft = createExecDraftFromBlueprint(blueprint);
+    const parsed = parseExecMarkdown(draft);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.document?.repositories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "web", install: "pnpm dev", dev: "pnpm dev" }),
+      ]),
+    );
+    expect(parsed.document?.environment.global.map((variable) => variable.name)).toEqual([
+      "DATABASE_URL",
+      "API_BASE_URL",
+    ]);
+  });
+
+  it("blocks PM requests until exec.md is saved and valid", () => {
+    const validation = validateBlueprint(blueprint, {
+      dockerReady: true,
+      syncedRepositoryIds: ["web", "api"],
+      env: { DATABASE_URL: "postgres://local", API_BASE_URL: "http://localhost:3000" },
+      occupiedPorts: [],
+    });
+
+    expect(canCapturePMRequest(blueprint, validation, createEmptyExecSetup())).toBe(false);
+  });
+
   it("validates the blueprint against repository sync, Docker, env, and ports", () => {
     const result = validateBlueprint(blueprint, {
       dockerReady: true,
@@ -67,9 +282,32 @@ describe("MVP core workflow", () => {
     expect(result.checks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "docker", status: "passed" }),
+        expect.objectContaining({ id: "engineering-packet", status: "passed" }),
         expect.objectContaining({ id: "repo-api", status: "failed" }),
         expect.objectContaining({ id: "env-API_BASE_URL", status: "failed" }),
         expect.objectContaining({ id: "port-api", status: "failed" }),
+      ]),
+    );
+  });
+
+  it("blocks PM requests until engineering supplies the execution packet", () => {
+    const incompleteBlueprint: WorkspaceBlueprint = {
+      ...blueprint,
+      setupStatus: "needs-engineering",
+    };
+
+    const validation = validateBlueprint(incompleteBlueprint, {
+      dockerReady: true,
+      syncedRepositoryIds: ["web", "api"],
+      env: { DATABASE_URL: "postgres://local", API_BASE_URL: "http://localhost:3000" },
+      occupiedPorts: [],
+    });
+
+    expect(validation.ready).toBe(false);
+    expect(canCapturePMRequest(incompleteBlueprint, validation)).toBe(false);
+    expect(validation.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "engineering-packet", status: "failed" }),
       ]),
     );
   });
