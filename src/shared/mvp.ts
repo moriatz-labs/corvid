@@ -5,6 +5,7 @@ import type {
   DeploymentDemoState,
   OpenAIChangePlan,
   ValidationResult,
+  WhatsAppConnect,
   WhatsAppIntake,
   WorkspaceBlueprint,
 } from "./types";
@@ -140,6 +141,24 @@ export function parseWhatsAppPayload(payload: unknown): WhatsAppIntake | null {
     messageId: message.id,
     text,
     workspaceHint,
+  };
+}
+
+export function buildWhatsAppConnect(input: {
+  connected: boolean;
+  status: WhatsAppConnect["status"];
+  origin: string;
+  qrImageUrl?: string;
+  qrUpdatedAt?: string;
+  detail?: string;
+}): WhatsAppConnect {
+  return {
+    connected: input.connected,
+    status: input.status,
+    qrImageUrl: input.qrImageUrl,
+    qrUpdatedAt: input.qrUpdatedAt,
+    webhookUrl: `${input.origin.replace(/\/$/, "")}/webhooks/whatsapp`,
+    detail: input.detail ?? (input.connected ? "WhatsApp is connected" : "Waiting for WhatsApp QR"),
   };
 }
 

@@ -51,9 +51,19 @@ export type BlueprintStep = {
 
 export type WhatsAppIntake = {
   from: string;
+  chatId?: string;
   messageId: string;
   text: string;
   workspaceHint?: string;
+};
+
+export type WhatsAppConnect = {
+  connected: boolean;
+  status: "idle" | "connecting" | "qr" | "connected" | "failed";
+  qrImageUrl?: string;
+  qrUpdatedAt?: string;
+  webhookUrl: string;
+  detail: string;
 };
 
 export type PMRequest = {

@@ -7,12 +7,14 @@ import {
   LayoutDashboard,
   Loader2,
   MessageCircle,
+  QrCode,
   Rocket,
   Play,
   RefreshCw,
   ScrollText,
   Settings,
   Square,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "./components/ui/badge";
@@ -29,6 +31,7 @@ import type {
   OpenAIChangePlan,
   PMRequest,
   ServiceConfig,
+  WhatsAppConnect,
 } from "./shared/types";
 
 const fallbackState = createInitialState();
@@ -39,6 +42,8 @@ export default function App() {
   const [requestBody, setRequestBody] = useState("Change the checkout headline to make the offer clearer.");
   const [requestType, setRequestType] = useState("Copy change");
   const [apiAvailable, setApiAvailable] = useState(false);
+  const [whatsAppConnect, setWhatsAppConnect] = useState<WhatsAppConnect | null>(null);
+  const [whatsAppQrOpen, setWhatsAppQrOpen] = useState(false);
 
   const completedSteps = useMemo(
     () => state.steps.filter((step) => step.status === "succeeded").length,
@@ -73,15 +78,45 @@ export default function App() {
   }
 
   async function connectWhatsApp() {
-    await runAction("whatsapp", async () => {
-      const response = await fetch(
-        "/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=local-dev&hub.challenge=corvin-whatsapp-ready",
-      );
-      if (!response.ok) {
-        throw new Error("WhatsApp verification failed");
-      }
-      return response.text();
-    });
+    await runAction(
+      "whatsapp",
+      () => api<WhatsAppConnect>("/api/integrations/whatsapp/connect"),
+      (connect) => {
+        setWhatsAppConnect(connect);
+        setWhatsAppQrOpen(true);
+      },
+    );
+  }
+
+  useEffect(() => {
+    if (!whatsAppConnect || whatsAppConnect.connected || !["connecting", "qr"].includes(whatsAppConnect.status)) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void refreshWhatsAppStatus();
+    }, 2000);
+
+    return () => window.clearInterval(timer);
+  }, [whatsAppConnect]);
+
+  async function refreshWhatsAppStatus() {
+    const next = await api<WhatsAppConnect>("/api/integrations/whatsapp/status");
+    setWhatsAppConnect(next);
+    if (next.connected) {
+      await refreshState();
+    }
+  }
+
+  async function refreshWhatsAppQr() {
+    await runAction(
+      "whatsapp-refresh",
+      () => api<WhatsAppConnect>("/api/integrations/whatsapp/refresh", { method: "POST" }),
+      (connect) => {
+        setWhatsAppConnect(connect);
+        setWhatsAppQrOpen(true);
+      },
+    );
   }
 
   async function connectGitHub() {
@@ -230,6 +265,15 @@ export default function App() {
                 onWhatsApp={() => void connectWhatsApp()}
                 onGitHub={() => void connectGitHub()}
               />
+              {whatsAppConnect ? (
+                <WhatsAppConnectPanel
+                  connect={whatsAppConnect}
+                  loading={loading === "whatsapp" || loading === "whatsapp-refresh"}
+                  onRefresh={() => void refreshWhatsAppStatus()}
+                  onNewQr={() => void refreshWhatsAppQr()}
+                  onOpenQr={() => setWhatsAppQrOpen(true)}
+                />
+              ) : null}
               <PMStoryPanel state={state} />
               <OpenAIPanel
                 state={state}
@@ -297,6 +341,15 @@ export default function App() {
           </div>
         </main>
       </div>
+      {whatsAppConnect && whatsAppQrOpen ? (
+        <WhatsAppQrModal
+          connect={whatsAppConnect}
+          loading={loading === "whatsapp" || loading === "whatsapp-refresh"}
+          onClose={() => setWhatsAppQrOpen(false)}
+          onRefresh={() => void refreshWhatsAppStatus()}
+          onNewQr={() => void refreshWhatsAppQr()}
+        />
+      ) : null}
     </div>
   );
 }
@@ -464,7 +517,7 @@ function IntegrationStrip({
       <IntegrationCard
         icon={<MessageCircle size={20} />}
         integration={map.whatsapp}
-        actionLabel={loading === "whatsapp" ? "Verifying..." : "Verify webhook"}
+        actionLabel={loading === "whatsapp" ? "Preparing..." : map.whatsapp?.status === "connected" ? "View QR" : "Connect WhatsApp"}
         onAction={onWhatsApp}
       />
       <IntegrationCard
@@ -474,6 +527,136 @@ function IntegrationStrip({
         onAction={onGitHub}
       />
       <IntegrationCard icon={<Database size={20} />} integration={map.docker} actionLabel="Ready" />
+    </div>
+  );
+}
+
+function WhatsAppConnectPanel({
+  connect,
+  loading,
+  onRefresh,
+  onNewQr,
+  onOpenQr,
+}: {
+  connect: WhatsAppConnect;
+  loading: boolean;
+  onRefresh: () => void;
+  onNewQr: () => void;
+  onOpenQr: () => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>WhatsApp thread pairing</CardTitle>
+          <CardDescription>{connect.connected ? "This WhatsApp account is connected" : connect.detail}</CardDescription>
+        </div>
+        <Badge tone={connect.connected ? "success" : "info"}>{connect.connected ? "Connected" : "Ready"}</Badge>
+      </CardHeader>
+      <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+        <div className="grid content-start gap-4">
+          <div className="rounded-md border border-border bg-background p-4">
+            <div className="mb-2 flex items-center gap-2 font-primary text-sm font-medium">
+              <QrCode size={16} />
+              Linked device setup
+            </div>
+            <p className="font-body text-sm leading-relaxed text-muted-foreground">
+              Scan the QR pop-up from WhatsApp linked devices. Once connected, Corvin sends Connected to your WhatsApp account.
+            </p>
+          </div>
+          <div className="rounded-md border border-border bg-background p-4">
+            <p className="font-primary text-sm font-medium">After scanning</p>
+            <ol className="mt-3 grid gap-2 font-body text-sm leading-relaxed text-muted-foreground">
+              <li>1. Wait for this panel to show Connected.</li>
+              <li>2. Send a request in any WhatsApp chat available to the linked account.</li>
+              <li>3. Corvin captures the message and replies in that same chat from the linked account.</li>
+            </ol>
+          </div>
+          <div className="grid gap-2 font-body text-sm text-muted-foreground">
+            <p>Webhook: <span className="font-mono text-foreground">{connect.webhookUrl}</span></p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 md:justify-end">
+          <Button onClick={onOpenQr} disabled={loading || connect.connected}>
+            {connect.connected ? "Connected" : "Show QR"}
+          </Button>
+          <Button variant="secondary" onClick={onRefresh} disabled={loading || connect.connected}>
+            Refresh status
+          </Button>
+          <Button variant="secondary" onClick={onNewQr} disabled={loading || connect.connected}>
+            {loading ? "Refreshing..." : "New QR code"}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function WhatsAppQrModal({
+  connect,
+  loading,
+  onClose,
+  onRefresh,
+  onNewQr,
+}: {
+  connect: WhatsAppConnect;
+  loading: boolean;
+  onClose: () => void;
+  onRefresh: () => void;
+  onNewQr: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">
+      <div className="w-full max-w-2xl rounded-md border border-border bg-card p-5 shadow-xl">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-primary text-xl font-medium">Connect WhatsApp</h2>
+            <p className="mt-1 font-body text-sm text-muted-foreground">
+              {connect.connected ? "This WhatsApp account is connected" : connect.detail}
+            </p>
+          </div>
+          <button
+            className="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={onClose}
+            aria-label="Close WhatsApp QR"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="grid gap-5 md:grid-cols-[380px_minmax(0,1fr)]">
+          <div className="grid place-items-center rounded-md border border-border bg-background p-4">
+            {connect.qrImageUrl ? (
+              <img src={connect.qrImageUrl} alt="WhatsApp pairing QR" className="size-[360px] max-w-full" />
+            ) : (
+              <div className="grid size-[360px] max-w-full place-items-center rounded-md bg-muted text-muted-foreground">
+                <Loader2 className="animate-spin" size={24} />
+              </div>
+            )}
+          </div>
+          <div className="rounded-md border border-border bg-background p-4">
+            <div className="mb-2 flex items-center gap-2 font-primary text-sm font-medium">
+              <QrCode size={16} />
+              Linked device QR
+            </div>
+            <p className="font-body text-sm leading-relaxed text-muted-foreground">
+              In WhatsApp, open Settings or Menu, choose Linked devices, tap Link a device, then scan this code.
+            </p>
+            {connect.qrUpdatedAt ? (
+              <p className="mt-2 font-mono text-xs text-muted-foreground">
+                QR refreshed {new Date(connect.qrUpdatedAt).toLocaleTimeString()}
+              </p>
+            ) : null}
+          </div>
+        </div>
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+            <Button onClick={onRefresh} disabled={loading || connect.connected}>
+              {connect.connected ? "Connected" : "Refresh status"}
+            </Button>
+            <Button variant="secondary" onClick={onNewQr} disabled={loading || connect.connected}>
+              {loading ? "Refreshing..." : "New QR code"}
+            </Button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,9 +1,12 @@
 import cors from "cors";
 import express from "express";
 import OpenAI from "openai";
+import QRCode from "qrcode";
 import {
   buildGitHubAuthorizeUrl,
+  buildWhatsAppConnect,
   createOpenAIChangePlan,
+  createRequestFromWhatsAppMessage,
   createWebRequest,
   generateComposeFile,
   parseWhatsAppPayload,
@@ -12,7 +15,13 @@ import {
   validateBlueprint,
 } from "../src/shared/mvp";
 import { createInitialState } from "../src/shared/demo";
-import type { MvpState } from "../src/shared/types";
+import type { MvpState, WhatsAppIntake } from "../src/shared/types";
+import {
+  getWhatsAppSnapshot,
+  refreshWhatsAppConnector,
+  sendWhatsAppMessage,
+  startWhatsAppConnector,
+} from "./whatsapp";
 
 export const app = express();
 export const state: MvpState = createInitialState();
@@ -75,6 +84,43 @@ app.get("/api/integrations/github/callback", (request, response) => {
   response.type("html").send("<p>GitHub connected. You can return to Corvin.</p>");
 });
 
+app.get("/api/integrations/whatsapp/connect", async (request, response) => {
+  const protocol = String(request.headers["x-forwarded-proto"] ?? request.protocol ?? "http").split(",")[0];
+  const host = request.headers.host ?? `localhost:${process.env.CORVIN_API_PORT ?? 8787}`;
+  const connection = await startWhatsAppConnector(async (intake) => {
+    await captureWhatsAppIntake(intake);
+  });
+  syncWhatsAppConnection(connection);
+
+  response.json(
+    await buildWhatsAppConnectResponse(connection, `${protocol}://${host}`),
+  );
+});
+
+app.get("/api/integrations/whatsapp/status", async (request, response) => {
+  const protocol = String(request.headers["x-forwarded-proto"] ?? request.protocol ?? "http").split(",")[0];
+  const host = request.headers.host ?? `localhost:${process.env.CORVIN_API_PORT ?? 8787}`;
+  const connection = getWhatsAppSnapshot();
+  syncWhatsAppConnection(connection);
+
+  response.json(
+    await buildWhatsAppConnectResponse(connection, `${protocol}://${host}`),
+  );
+});
+
+app.post("/api/integrations/whatsapp/refresh", async (request, response) => {
+  const protocol = String(request.headers["x-forwarded-proto"] ?? request.protocol ?? "http").split(",")[0];
+  const host = request.headers.host ?? `localhost:${process.env.CORVIN_API_PORT ?? 8787}`;
+  const connection = await refreshWhatsAppConnector(async (intake) => {
+    await captureWhatsAppIntake(intake);
+  });
+  syncWhatsAppConnection(connection);
+
+  response.json(
+    await buildWhatsAppConnectResponse(connection, `${protocol}://${host}`),
+  );
+});
+
 app.get("/webhooks/whatsapp", (request, response) => {
   const mode = request.query["hub.mode"];
   const token = request.query["hub.verify_token"];
@@ -82,9 +128,7 @@ app.get("/webhooks/whatsapp", (request, response) => {
   const expected = process.env.WHATSAPP_VERIFY_TOKEN ?? "local-dev";
 
   if (mode === "subscribe" && token === expected && typeof challenge === "string") {
-    upsertIntegration("whatsapp", "connected", "WhatsApp webhook verified");
-    updateStep("whatsapp-entry", "succeeded");
-    updateFinalEntryPointStep();
+    upsertIntegration("whatsapp", isIntegrationConnected("whatsapp") ? "connected" : "ready", "Webhook verified; QR pairing is ready");
     state.logs.unshift("[whatsapp] webhook verification succeeded");
     response.status(200).send(challenge);
     return;
@@ -93,31 +137,14 @@ app.get("/webhooks/whatsapp", (request, response) => {
   response.status(403).json({ ok: false, message: "Webhook verification failed" });
 });
 
-app.post("/webhooks/whatsapp", (request, response) => {
+app.post("/webhooks/whatsapp", async (request, response) => {
   const intake = parseWhatsAppPayload(request.body);
   if (!intake) {
     response.status(200).json({ ok: true, ignored: true });
     return;
   }
 
-  const pmRequest = {
-    ...createWebRequest({
-      title: intake.text.replace(/^corvin\s+[\w-]+:\s*/i, ""),
-      body: intake.text,
-      requester: intake.from,
-      workspaceId: intake.workspaceHint ?? state.workspace.id,
-    }),
-    id: `wa_${intake.messageId.replace(/[^\w-]/g, "_")}`,
-    channel: "whatsapp" as const,
-  };
-
-  state.requests.unshift(pmRequest);
-  upsertIntegration("whatsapp", "connected", "WhatsApp message captured");
-  updateStep("whatsapp-entry", "succeeded");
-  updateStep("request", "succeeded");
-  updateStep("handoff", "succeeded");
-  updateFinalEntryPointStep();
-  state.logs.unshift(`[whatsapp] captured request ${pmRequest.id} from ${intake.from}`);
+  const pmRequest = await captureWhatsAppIntake(intake);
   response.json({ ok: true, request: pmRequest });
 });
 
@@ -257,6 +284,84 @@ function upsertIntegration(id: "whatsapp" | "github" | "docker", status: MvpStat
   state.integrations = state.integrations.map((integration) =>
     integration.id === id ? { ...integration, status, detail } : integration,
   );
+}
+
+async function captureWhatsAppIntake(intake: WhatsAppIntake) {
+  const requestId = `wa_${intake.messageId.replace(/[^\w-]/g, "_")}`;
+  const existing = state.requests.find((request) => request.id === requestId);
+  if (existing) {
+    state.logs.unshift(`[whatsapp] ignored duplicate message ${requestId}`);
+    return existing;
+  }
+
+  const pmRequest = {
+    ...createRequestFromWhatsAppMessage(intake, state.workspace),
+    id: requestId,
+    createdAt: new Date().toISOString(),
+  };
+
+  state.requests.unshift(pmRequest);
+  upsertIntegration("whatsapp", "connected", "WhatsApp thread connected");
+  updateStep("whatsapp-entry", "succeeded");
+  updateStep("request", "succeeded");
+  updateStep("handoff", "succeeded");
+  updateFinalEntryPointStep();
+  state.logs.unshift(`[whatsapp] captured request ${pmRequest.id} from ${intake.from}`);
+  if (intake.chatId) {
+    await sendUserSideWhatsAppResponse(intake.chatId, pmRequest.title);
+  }
+  return pmRequest;
+}
+
+async function sendUserSideWhatsAppResponse(chatId: string, title: string) {
+  const responseText = [
+    `Corvin captured: ${title}`,
+    "I am preparing the workspace context and will use this thread for updates.",
+  ].join("\n");
+
+  try {
+    await sendWhatsAppMessage(chatId, responseText);
+    state.logs.unshift("[whatsapp] sent user-side response in linked chat");
+  } catch (error) {
+    state.logs.unshift(
+      `[whatsapp] response send failed: ${error instanceof Error ? error.message : "unknown error"}`,
+    );
+  }
+}
+
+function isIntegrationConnected(id: "whatsapp" | "github" | "docker") {
+  return state.integrations.some((integration) => integration.id === id && integration.status === "connected");
+}
+
+function syncWhatsAppConnection(connection: { connected: boolean; status: string; detail: string }) {
+  if (connection.connected) {
+    upsertIntegration("whatsapp", "connected", connection.detail);
+    updateStep("whatsapp-entry", "succeeded");
+    updateFinalEntryPointStep();
+    return;
+  }
+  if (connection.status === "qr" || connection.status === "connecting") {
+    upsertIntegration("whatsapp", "in-progress", connection.detail);
+  }
+}
+
+async function buildWhatsAppConnectResponse(
+  connection: { connected: boolean; status: "idle" | "connecting" | "qr" | "connected" | "failed"; qr?: string; detail: string },
+  origin: string,
+) {
+  return buildWhatsAppConnect({
+    connected: connection.connected,
+    status: connection.status,
+    origin,
+    qrImageUrl: connection.qr
+      ? await QRCode.toDataURL(connection.qr, {
+          errorCorrectionLevel: "M",
+          margin: 2,
+          width: 360,
+        })
+      : undefined,
+    detail: connection.detail,
+  });
 }
 
 function updateStep(id: string, status: MvpState["steps"][number]["status"]) {
