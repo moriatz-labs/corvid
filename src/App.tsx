@@ -38,26 +38,11 @@ import { initializeProductAnalytics, trackProductEvent } from "./lib/analytics";
 import { cn } from "./lib/utils";
 import DemoApp from "./DemoApp";
 
-type ShelfmarkWorkspace = {
-  id: "shelfmark";
-  name: "Shelfmark";
-  repo: string;
-  defaultBranch: string;
-  branchPrefix: string;
-  localPath: string;
-  productionUrl: string;
-  installCommand: string;
-  testCommand: string;
-  buildCommand: string;
-  screenshotPath: string;
-  noticeFile: string;
-  novusInstalled: boolean;
-};
-
-type ShelfmarkJudgeRequest = {
+type ProductChangeRequest = {
   id: string;
   requester: string;
   body: string;
+  productName?: string;
   status: "queued" | "blocked" | "running" | "pr-open" | "failed";
   summary: string;
   pullRequestUrl?: string;
@@ -69,8 +54,7 @@ type ShelfmarkJudgeRequest = {
 };
 
 type ShelfmarkWorkspaceResponse = {
-  workspace: ShelfmarkWorkspace;
-  requests: ShelfmarkJudgeRequest[];
+  requests: ProductChangeRequest[];
   githubReady: boolean;
 };
 
@@ -127,22 +111,6 @@ type OnboardingScanResult = {
 };
 
 type OnboardingStep = "connect" | "scan" | "install";
-
-const fallbackWorkspace: ShelfmarkWorkspace = {
-  id: "shelfmark",
-  name: "Shelfmark",
-  repo: "moriatz-labs/shelfmark",
-  defaultBranch: "main",
-  branchPrefix: "feature/shelfmark-judge",
-  localPath: "C:/Users/loqpm/Documents/Shelfmark",
-  productionUrl: "https://shelfmark.vercel.app",
-  installCommand: "npm install",
-  testCommand: "npm test",
-  buildCommand: "npm run build",
-  screenshotPath: "/",
-  noticeFile: "src/content/judge-request.ts",
-  novusInstalled: false,
-};
 
 const starterRequest = "Make Shelfmark's onboarding clearer for product managers saving research and customer evidence.";
 const trackedLoginIds = new Set<string>();
@@ -253,9 +221,9 @@ function SignedOutGate() {
           <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <DarkPill tone="warning">Judge sign-in required</DarkPill>
-              <h1 className="mt-5 font-primary text-3xl font-medium leading-tight">Connect a real product repository.</h1>
+              <h1 className="mt-5 font-primary text-3xl font-medium leading-tight">Make product calls without waiting on setup.</h1>
               <p className="mt-3 max-w-prose font-body text-sm leading-relaxed text-terminal-muted">
-                Corvin needs your identity before it can generate an auditable run packet, create branches, capture screenshots, and open PRs.
+                Sign in to turn product judgment into visible experiments: a clear request, screenshots, checks, and a reviewable change your team can inspect.
               </p>
             </div>
             <div className="grid size-12 shrink-0 place-items-center rounded-md border border-terminal-border bg-[#111113] text-terminal-muted">
@@ -264,7 +232,7 @@ function SignedOutGate() {
           </div>
           <SignInButton mode="modal">
             <Button className="mt-8 min-h-12 w-full bg-terminal-text text-terminal hover:bg-white" icon={<ShieldCheck size={16} />}>
-              Sign in with Clerk
+              Sign in to Corvin
             </Button>
           </SignInButton>
         </div>
@@ -350,7 +318,7 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
       });
       setActiveStep("install");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Corvin could not scan the selected repository.");
+      setError(caught instanceof Error ? caught.message : "Corvin could not prepare the selected product.");
       setActiveStep("connect");
     } finally {
       setScanLoading(false);
@@ -360,8 +328,14 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
   if (onboardingComplete) {
     return (
       <div className="min-h-screen bg-background text-foreground">
-        <WorkbenchHeader activeStep="install" />
-        <JudgeConsole requester={requester} authMode={authMode} />
+        <WorkbenchHeader activeStep="install" productName={scan?.repository.label ?? selectedRepository.label} />
+        <JudgeConsole
+          requester={requester}
+          authMode={authMode}
+          scan={scan}
+          selectedRepository={scan?.repository ?? selectedRepository}
+          githubReadyFromOnboarding={githubReady}
+        />
       </div>
     );
   }
@@ -374,10 +348,10 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
           <div className="mx-auto w-full max-w-3xl">
             <div className="mb-9 text-center">
               <h1 className="mx-auto max-w-2xl font-primary text-4xl font-medium leading-tight text-white md:text-5xl">
-                Product changes, powered by your repository.
+                Product decisions, backed by working software.
               </h1>
               <p className="mt-4 font-body text-sm leading-relaxed text-terminal-muted md:text-base">
-                Connect the app a PM will work on. Corvin scans the codebase and generates `exec.md` during onboarding.
+                Pick the product you want to improve. Corvin handles the setup context, checks, and review evidence behind the scenes.
               </p>
             </div>
 
@@ -391,8 +365,8 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
                       <Github size={20} />
                     </div>
                     <div>
-                      <h2 className="font-primary text-lg font-medium text-white">Import Git repositories</h2>
-                      <p className="mt-1 font-body text-sm text-terminal-muted">{repositories.length} available Moriatz Labs repositories</p>
+                      <h2 className="font-primary text-lg font-medium text-white">Choose a product workspace</h2>
+                      <p className="mt-1 font-body text-sm text-terminal-muted">{repositories.length} connected products</p>
                     </div>
                   </div>
                   <DarkPill tone={githubReady ? "success" : "neutral"}>{githubReady ? "GitHub token ready" : "GitHub public sync"}</DarkPill>
@@ -409,7 +383,7 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
                   <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-terminal-muted" size={17} />
                   <input
                     className="min-h-11 w-full rounded-md border border-terminal-border bg-[#111113] pl-10 pr-3 font-default text-sm text-terminal-text outline-none transition-colors placeholder:text-terminal-muted focus:border-terminal-muted"
-                    placeholder="Search repositories..."
+                    placeholder="Search products..."
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                   />
@@ -438,9 +412,8 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-primary text-sm font-medium text-white">{repository.label}</p>
-                            {repository.canRunJudgeRequests ? <DarkPill tone="success">PM-ready</DarkPill> : <DarkPill tone="neutral">Setup only</DarkPill>}
+                            {repository.canRunJudgeRequests ? <DarkPill tone="success">PM-ready</DarkPill> : <DarkPill tone="neutral">Not judge-ready</DarkPill>}
                           </div>
-                          <p className="mt-1 truncate font-mono text-xs text-terminal-muted">{repository.repo}</p>
                           <p className="mt-3 font-body text-xs leading-relaxed text-terminal-muted">{repository.description}</p>
                         </div>
                         <div
@@ -456,7 +429,7 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
                   ))}
                   {filteredRepositories.length === 0 ? (
                     <p className="rounded-md border border-dashed border-terminal-border p-5 text-center font-body text-sm text-terminal-muted">
-                      No repositories match that search.
+                      No products match that search.
                     </p>
                   ) : null}
                 </div>
@@ -464,7 +437,7 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
 
               <div className="flex flex-col gap-4 bg-[#282829] p-5 sm:flex-row sm:items-center sm:justify-between md:p-6">
                 <p className="font-body text-sm text-terminal-muted">
-                  Selected: <span className="font-mono text-terminal-text">{selectedRepository.repo}</span>
+                  Selected: <span className="font-mono text-terminal-text">{selectedRepository.label}</span>
                 </p>
                 <Button
                   className="min-h-11 bg-terminal-text text-terminal hover:bg-white"
@@ -472,7 +445,7 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
                   disabled={scanLoading}
                   icon={scanLoading ? <Loader2 className="animate-spin" size={16} /> : <WandSparkles size={16} />}
                 >
-                  {scanLoading ? "Scanning codebase..." : "Scan & generate exec.md"}
+                  {scanLoading ? "Reading product context..." : "Generate PM run packet"}
                 </Button>
               </div>
             </div>
@@ -521,12 +494,12 @@ function OnboardingIntro({ onStart }: { onStart: () => void }) {
         <section className="w-full max-w-2xl">
           <div className="text-center">
             <h1 className="font-primary text-4xl font-medium leading-tight text-white md:text-5xl">
-              Product changes,
+              PMs can ship
               <br />
-              powered by your code.
+              without setup drag.
             </h1>
             <p className="mt-4 font-default text-sm text-terminal-muted md:text-base">
-              Ready in under 5 minutes · One PR to review · Built for PMs
+              Make the call · Ask naturally · Review one clean PR
             </p>
           </div>
 
@@ -534,20 +507,20 @@ function OnboardingIntro({ onStart }: { onStart: () => void }) {
             <IntroStepCard
               icon={<Code2 size={23} />}
               index="1."
-              title="Connect & scan your codebase"
-              body="Pick the Moriatz Labs repository the product manager will work on. Corvin maps framework, commands, pages, and analytics needs automatically."
+              title="Choose the product"
+              body="Pick the Moriatz Labs app you want to improve. Corvin turns product context into an execution plan automatically."
             />
             <IntroStepCard
               icon={<Sparkles size={23} />}
               index="2."
-              title="AI generates your exec.md"
-              body="The run packet is created from how the code actually works, so engineering does not need to author setup instructions by hand."
+              title="Corvin removes setup work"
+              body="The run packet is generated for you so PMs are not blocked by scripts, env notes, or messy handoff docs."
             />
             <IntroStepCard
               icon={<GitPullRequest size={23} />}
               index="3."
-              title="Go live via a reviewable PR"
-              body="A PM request becomes a branch, screenshot, summary, and pull request. Corvin never auto-merges judge changes."
+              title="Review the decision as a PR"
+              body="A product request becomes a branch, screenshot, summary, and pull request. Corvin never auto-merges judge changes."
             />
           </div>
 
@@ -637,7 +610,7 @@ function OnboardingTopBar({ activeStep, completed }: { activeStep: OnboardingSte
   );
 }
 
-function WorkbenchHeader({ activeStep }: { activeStep: OnboardingStep }) {
+function WorkbenchHeader({ activeStep, productName }: { activeStep: OnboardingStep; productName: string }) {
   return (
     <header className="border-b border-border bg-card">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 md:px-8">
@@ -648,7 +621,7 @@ function WorkbenchHeader({ activeStep }: { activeStep: OnboardingStep }) {
           <img src="/corvin-logo.png" alt="Corvin" className="size-10 rounded-md border border-border object-cover" />
           <div>
             <p className="font-primary text-lg font-medium">Corvin</p>
-            <p className="font-body text-xs text-muted-foreground">Shelfmark PM workbench</p>
+            <p className="font-body text-xs text-muted-foreground">{productName} PM workbench</p>
           </div>
         </div>
         <div className="hidden items-center gap-2 lg:flex">
@@ -683,9 +656,9 @@ function SetupHeroCard() {
           <Code2 size={23} />
         </div>
         <div>
-          <h2 className="font-primary text-lg font-medium text-white">Connect & scan your codebase</h2>
+          <h2 className="font-primary text-lg font-medium text-white">Choose the product to improve</h2>
           <p className="mt-2 font-body text-sm leading-relaxed text-terminal-muted">
-            Choose the repository the product manager will work on. Corvin reads the framework, commands, pages, and analytics needs, then writes the run packet automatically.
+            Corvin reads the product workspace for you, then turns framework, commands, pages, and analytics needs into a setup packet PMs can use without engineering translation.
           </p>
         </div>
       </div>
@@ -701,7 +674,7 @@ function InstallPanel({ scan, onContinue }: { scan: OnboardingScanResult; onCont
           <DarkPill tone={scan.validation?.ready === false ? "warning" : "success"}>{scan.validation?.ready === false ? "Needs review" : "exec.md ready"}</DarkPill>
           <h2 className="mt-4 font-primary text-2xl font-medium text-white">Corvin generated the run packet.</h2>
           <p className="mt-2 max-w-prose font-body text-sm leading-relaxed text-terminal-muted">
-            The PM does not need an engineering-authored setup file. Corvin saved `exec.md` from the repository scan and can now use it as workspace context.
+            The PM does not need an engineering-authored setup file. Corvin saved `exec.md` from the product scan and can now use it as workspace context.
           </p>
         </div>
         <div className="grid size-12 shrink-0 place-items-center rounded-md border border-terminal-border bg-[#111113] text-terminal-muted">
@@ -711,8 +684,8 @@ function InstallPanel({ scan, onContinue }: { scan: OnboardingScanResult; onCont
 
       <div className="grid gap-3 md:grid-cols-3">
         <DarkFact icon={<Package size={16} />} label="Framework" value={scan.detected.framework} />
-        <DarkFact icon={<Terminal size={16} />} label="Commands" value={`${scan.repository.testCommand} + ${scan.repository.buildCommand}`} />
-        <DarkFact icon={<Database size={16} />} label="Analytics" value={scan.repository.novusInstalled ? "Novus/Pendo active" : "Install pending"} />
+        <DarkFact icon={<Terminal size={16} />} label="Verification" value={`${scan.repository.testCommand} + ${scan.repository.buildCommand}`} />
+        <DarkFact icon={<Database size={16} />} label="Analytics" value={scan.repository.novusInstalled ? "Novus/Pendo active" : "Analytics pending"} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -736,7 +709,7 @@ function InstallPanel({ scan, onContinue }: { scan: OnboardingScanResult; onCont
 
       <div className="flex flex-col gap-3 border-t border-terminal-border pt-5 sm:flex-row sm:items-center sm:justify-between">
         <p className="font-body text-sm text-terminal-muted">
-          Next: judges can request changes against <span className="font-mono text-terminal-text">{scan.repository.repo}</span>.
+          Next: judges can request fixes, features, and experiments for <span className="font-mono text-terminal-text">{scan.repository.label}</span>.
         </p>
         <Button className="min-h-11 bg-terminal-text text-terminal hover:bg-white" onClick={onContinue} icon={<ArrowRight size={16} />}>
           Open PM workbench
@@ -767,7 +740,7 @@ function SetupAssistantPanel({
             <img src="/corvin-logo.png" alt="" className="size-8 rounded-md object-cover" />
             <div>
               <p className="font-primary text-sm font-medium text-white">Corvin Setup Assistant</p>
-              <p className="font-mono text-[11px] text-terminal-muted">{selectedRepository.repo}</p>
+              <p className="font-mono text-[11px] text-terminal-muted">{selectedRepository.label}</p>
             </div>
           </div>
 
@@ -776,7 +749,7 @@ function SetupAssistantPanel({
               <Bot size={18} />
             </div>
             <p className="font-mono text-sm leading-relaxed text-terminal-text">
-              Welcome. I will connect the repository, scan framework and scripts, generate `exec.md`, and keep product managers away from setup chores.
+              Welcome. I will read the product context, prepare the run packet, and keep setup details out of the product decision.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <DarkQuestion text="Why connect GitHub?" />
@@ -786,7 +759,7 @@ function SetupAssistantPanel({
           </div>
 
           <div className="mt-5 grid gap-3">
-            <AssistantRow active={activeStep === "connect"} complete={Boolean(scan)} icon={<Github size={16} />} title="Connect" body="Select the Moriatz Labs repo PMs will change." />
+            <AssistantRow active={activeStep === "connect"} complete={Boolean(scan)} icon={<Github size={16} />} title="Connect" body="Select the connected product PMs will improve." />
             <AssistantRow active={activeStep === "scan"} complete={Boolean(scan)} icon={<Search size={16} />} title="Scan" body="Infer framework, commands, health URL, pages, and env keys." />
             <AssistantRow active={activeStep === "install"} complete={Boolean(scan)} icon={<FileText size={16} />} title="Install" body="Write exec.md and unlock the PM change workbench." />
           </div>
@@ -853,34 +826,61 @@ function DarkQuestion({ text }: { text: string }) {
   return <span className="rounded-md border border-terminal-border bg-[#202022] px-2 py-1 font-mono text-[11px] text-terminal-text">{text}</span>;
 }
 
-function JudgeConsole({ requester, authMode }: { requester: string; authMode: string }) {
-  const [workspace, setWorkspace] = useState<ShelfmarkWorkspace>(fallbackWorkspace);
-  const [githubReady, setGithubReady] = useState(false);
-  const [recentRequests, setRecentRequests] = useState<ShelfmarkJudgeRequest[]>([]);
+function JudgeConsole({
+  requester,
+  authMode,
+  scan,
+  selectedRepository,
+  githubReadyFromOnboarding,
+}: {
+  requester: string;
+  authMode: string;
+  scan: OnboardingScanResult | null;
+  selectedRepository: OnboardingRepository;
+  githubReadyFromOnboarding: boolean;
+}) {
+  const product = scan?.repository ?? selectedRepository;
+  const productUrl = product.productionUrl ?? product.healthUrl;
+  const [githubReady, setGithubReady] = useState(githubReadyFromOnboarding);
+  const [recentRequests, setRecentRequests] = useState<ProductChangeRequest[]>([]);
   const [requestBody, setRequestBody] = useState(starterRequest);
-  const [result, setResult] = useState<ShelfmarkJudgeRequest | null>(null);
+  const [result, setResult] = useState<ProductChangeRequest | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setGithubReady(githubReadyFromOnboarding);
+  }, [githubReadyFromOnboarding]);
+
+  useEffect(() => {
+    setResult(null);
+    setRecentRequests([]);
+    setRequestBody(
+      product.id === "shelfmark"
+        ? starterRequest
+        : `Improve ${product.label}'s first-run experience so a product manager can understand what changed and why.`,
+    );
+  }, [product.id, product.label]);
+
+  useEffect(() => {
+    if (product.id !== "shelfmark") return;
     let cancelled = false;
     async function loadWorkspace() {
       try {
         const payload = await api<ShelfmarkWorkspaceResponse>("/api/shelfmark/workspace");
         if (cancelled) return;
-        setWorkspace(payload.workspace);
         setGithubReady(payload.githubReady);
         setRecentRequests(payload.requests);
-        trackProductEvent("corvin_shelfmark_workspace_loaded", {
-          repository: payload.workspace.repo,
+        trackProductEvent("corvin_product_workspace_loaded", {
+          product: product.label,
+          repository: product.repo,
           githubReady: payload.githubReady,
-          novusInstalled: payload.workspace.novusInstalled,
+          novusInstalled: product.novusInstalled,
           recentRequestCount: payload.requests.length,
         });
       } catch {
         if (!cancelled) {
-          setWorkspace(fallbackWorkspace);
-          setGithubReady(false);
+          setGithubReady(githubReadyFromOnboarding);
         }
       }
     }
@@ -889,7 +889,7 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [githubReadyFromOnboarding, product.id, product.label, product.novusInstalled, product.repo]);
 
   const latestRequest = result ?? recentRequests[0] ?? null;
   const canSubmit = requestBody.trim().length >= 12 && !loading;
@@ -901,15 +901,17 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
     setResult(null);
 
     try {
-      const response = await fetch("/api/shelfmark/requests", {
+      const response = await fetch(`/api/product-workspaces/${encodeURIComponent(product.id)}/requests`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requester, body: requestBody }),
       });
-      const payload = (await response.json()) as ShelfmarkJudgeRequest;
+      const payload = (await response.json()) as ProductChangeRequest;
       setResult(payload);
       setRecentRequests((current) => [payload, ...current.filter((request) => request.id !== payload.id)]);
-      trackProductEvent("corvin_shelfmark_request_submitted", {
+      trackProductEvent("corvin_product_request_submitted", {
+        product: product.label,
+        repository: product.repo,
         requestLength: requestBody.trim().length,
         status: payload.status,
         hasCloudRun: Boolean(payload.cloudRunUrl),
@@ -918,10 +920,10 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
         verificationCount: payload.verification.length,
       });
       if (!response.ok) {
-        setError(payload.blockedReason ?? payload.summary ?? "Corvin could not complete the Shelfmark request.");
+        setError(payload.blockedReason ?? payload.summary ?? `Corvin could not complete the ${product.label} request.`);
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Corvin could not complete the Shelfmark request.");
+      setError(caught instanceof Error ? caught.message : `Corvin could not complete the ${product.label} request.`);
     } finally {
       setLoading(false);
     }
@@ -935,15 +937,15 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
             <div>
               <div className="mb-4 flex flex-wrap items-center gap-2">
                 <Badge tone={githubReady ? "success" : "warning"}>{githubReady ? "GitHub ready" : "GitHub token needed"}</Badge>
-                <Badge tone={workspace.novusInstalled ? "success" : "neutral"}>{workspace.novusInstalled ? "Novus installed" : "Novus pending"}</Badge>
-                <Badge tone="info">exec.md generated</Badge>
-                <Badge tone="info">PR-only review gate</Badge>
+                <Badge tone={product.novusInstalled ? "success" : "neutral"}>{product.novusInstalled ? "Novus installed" : "Novus pending"}</Badge>
+                <Badge tone="info">Run packet ready</Badge>
+                <Badge tone="info">{product.id === "shelfmark" ? "Cloud agent ready" : "Local agent ready"}</Badge>
               </div>
               <h1 className="max-w-4xl font-primary text-4xl font-medium leading-tight md:text-6xl">
-                Tell Corvin what Shelfmark should do better.
+                Decide what {product.label} should do better.
               </h1>
               <p className="mt-4 max-w-prose font-body text-base leading-relaxed text-muted-foreground">
-                Corvin turns a product-manager request into a reviewable repository change: branch, checks, screenshot, summary, and pull request.
+                Describe the problem, feature, or experiment in plain language. Corvin turns it into a visible product change with checks, screenshot, summary, and pull request.
               </p>
             </div>
             <div className="rounded-md border border-border bg-background p-4">
@@ -964,12 +966,12 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
             </label>
             <div className="grid gap-3 rounded-md border border-border bg-background p-4 md:grid-cols-3">
               <PlainStep icon={<FileText size={17} />} title="Write naturally" body="Ask for copy, flow, UI, empty-state, or clarity improvements." />
-              <PlainStep icon={<GitBranch size={17} />} title="Corvin edits Shelfmark" body="The request lands in the real Moriatz Labs Shelfmark repository on a branch." />
-              <PlainStep icon={<GitPullRequest size={17} />} title="Review evidence" body="You get a PR, screenshot, summary, and verification checks." />
+              <PlainStep icon={<GitBranch size={17} />} title={`Corvin changes ${product.label}`} body="The request becomes a visible product update behind a review gate." />
+              <PlainStep icon={<GitPullRequest size={17} />} title="Review evidence" body="You get a PR, screenshot, summary, and verification checks for the proposed change." />
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <Button className="min-h-12" onClick={() => void submitRequest()} disabled={!canSubmit} icon={loading ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}>
-                {loading ? "Preparing evidence..." : "Create Shelfmark PR"}
+                {loading ? "Preparing evidence..." : "Create review change"}
               </Button>
               <p className="font-body text-sm text-muted-foreground">
                 Corvin will not merge, deploy, read secrets, or edit environment files.
@@ -989,19 +991,19 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
             <CardHeader>
               <div>
                 <CardTitle>Product workspace</CardTitle>
-                <CardDescription>The app Corvin will change for judges.</CardDescription>
+                <CardDescription>The selected product Corvin will improve for judges.</CardDescription>
               </div>
               <div className="grid size-11 place-items-center rounded-md bg-muted text-muted-foreground">
                 <BookmarkPlus size={19} />
               </div>
             </CardHeader>
             <div className="grid gap-3">
-              <InfoRow label="Product" value={workspace.name} />
-              <InfoRow label="Repository" value={workspace.repo} />
-              <InfoRow label="Branch base" value={workspace.defaultBranch} />
-              <InfoRow label="Checks" value={`${workspace.testCommand} + ${workspace.buildCommand}`} />
-              <a className="mt-2 flex min-h-11 items-center justify-between rounded-md border border-border bg-background px-3 py-2 font-primary text-sm text-foreground hover:bg-muted" href={workspace.productionUrl} target="_blank" rel="noreferrer">
-                Open Shelfmark
+              <InfoRow label="Product" value={product.label} />
+              <InfoRow label="Review gate" value="Pull request only" />
+              <InfoRow label="Decision path" value="Request -> checks -> screenshot -> PR" />
+              <InfoRow label="Checks" value={`${product.testCommand} + ${product.buildCommand}`} />
+              <a className="mt-2 flex min-h-11 items-center justify-between rounded-md border border-border bg-background px-3 py-2 font-primary text-sm text-foreground hover:bg-muted" href={productUrl} target="_blank" rel="noreferrer">
+                Open {product.label}
                 <ArrowUpRight size={15} />
               </a>
             </div>
@@ -1018,7 +1020,7 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
             <div className="grid gap-3">
               <Boundary text="No automatic merge or deploy." />
               <Boundary text="No secret or environment-file changes." />
-              <Boundary text="Every accepted request produces a reviewable PR." />
+              <Boundary text="Every accepted request produces reviewable evidence." />
             </div>
           </Card>
         </aside>
@@ -1029,7 +1031,7 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
           <CardHeader>
             <div>
               <CardTitle>Latest outcome</CardTitle>
-              <CardDescription>What the judge receives after Corvin finishes the Shelfmark change.</CardDescription>
+              <CardDescription>What the judge receives after Corvin finishes the {product.label} change.</CardDescription>
             </div>
             <Badge tone={statusTone}>{latestRequest?.status ?? "Waiting"}</Badge>
           </CardHeader>
