@@ -253,9 +253,9 @@ function SignedOutGate() {
           <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <DarkPill tone="warning">Judge sign-in required</DarkPill>
-              <h1 className="mt-5 font-primary text-3xl font-medium leading-tight">Connect a real product repository.</h1>
+              <h1 className="mt-5 font-primary text-3xl font-medium leading-tight">Make product calls without waiting on setup.</h1>
               <p className="mt-3 max-w-prose font-body text-sm leading-relaxed text-terminal-muted">
-                Corvin needs your identity before it can generate an auditable run packet, create branches, capture screenshots, and open PRs.
+                Sign in to turn product judgment into auditable changes: a clear request, a branch, screenshots, checks, and a PR your team can review.
               </p>
             </div>
             <div className="grid size-12 shrink-0 place-items-center rounded-md border border-terminal-border bg-[#111113] text-terminal-muted">
@@ -264,7 +264,7 @@ function SignedOutGate() {
           </div>
           <SignInButton mode="modal">
             <Button className="mt-8 min-h-12 w-full bg-terminal-text text-terminal hover:bg-white" icon={<ShieldCheck size={16} />}>
-              Sign in with Clerk
+              Sign in to Corvin
             </Button>
           </SignInButton>
         </div>
@@ -374,10 +374,10 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
           <div className="mx-auto w-full max-w-3xl">
             <div className="mb-9 text-center">
               <h1 className="mx-auto max-w-2xl font-primary text-4xl font-medium leading-tight text-white md:text-5xl">
-                Product changes, powered by your repository.
+                Product decisions, backed by working software.
               </h1>
               <p className="mt-4 font-body text-sm leading-relaxed text-terminal-muted md:text-base">
-                Connect the app a PM will work on. Corvin scans the codebase and generates `exec.md` during onboarding.
+                Pick the product you want to improve. Corvin handles the repository context, setup packet, checks, and review evidence behind the scenes.
               </p>
             </div>
 
@@ -472,7 +472,7 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
                   disabled={scanLoading}
                   icon={scanLoading ? <Loader2 className="animate-spin" size={16} /> : <WandSparkles size={16} />}
                 >
-                  {scanLoading ? "Scanning codebase..." : "Scan & generate exec.md"}
+                  {scanLoading ? "Reading product context..." : "Generate PM run packet"}
                 </Button>
               </div>
             </div>
@@ -521,12 +521,12 @@ function OnboardingIntro({ onStart }: { onStart: () => void }) {
         <section className="w-full max-w-2xl">
           <div className="text-center">
             <h1 className="font-primary text-4xl font-medium leading-tight text-white md:text-5xl">
-              Product changes,
+              PMs can ship
               <br />
-              powered by your code.
+              without setup drag.
             </h1>
             <p className="mt-4 font-default text-sm text-terminal-muted md:text-base">
-              Ready in under 5 minutes · One PR to review · Built for PMs
+              Make the call · Ask naturally · Review one clean PR
             </p>
           </div>
 
@@ -534,20 +534,20 @@ function OnboardingIntro({ onStart }: { onStart: () => void }) {
             <IntroStepCard
               icon={<Code2 size={23} />}
               index="1."
-              title="Connect & scan your codebase"
-              body="Pick the Moriatz Labs repository the product manager will work on. Corvin maps framework, commands, pages, and analytics needs automatically."
+              title="Choose the product"
+              body="Pick the Moriatz Labs app you want to improve. Corvin translates product context into the technical map automatically."
             />
             <IntroStepCard
               icon={<Sparkles size={23} />}
               index="2."
-              title="AI generates your exec.md"
-              body="The run packet is created from how the code actually works, so engineering does not need to author setup instructions by hand."
+              title="Corvin removes setup work"
+              body="The run packet is generated from the repository so PMs are not blocked by scripts, env notes, or messy handoff docs."
             />
             <IntroStepCard
               icon={<GitPullRequest size={23} />}
               index="3."
-              title="Go live via a reviewable PR"
-              body="A PM request becomes a branch, screenshot, summary, and pull request. Corvin never auto-merges judge changes."
+              title="Review the decision as a PR"
+              body="A product request becomes a branch, screenshot, summary, and pull request. Corvin never auto-merges judge changes."
             />
           </div>
 
@@ -683,9 +683,9 @@ function SetupHeroCard() {
           <Code2 size={23} />
         </div>
         <div>
-          <h2 className="font-primary text-lg font-medium text-white">Connect & scan your codebase</h2>
+          <h2 className="font-primary text-lg font-medium text-white">Choose the product to improve</h2>
           <p className="mt-2 font-body text-sm leading-relaxed text-terminal-muted">
-            Choose the repository the product manager will work on. Corvin reads the framework, commands, pages, and analytics needs, then writes the run packet automatically.
+            Corvin reads the repository for you, then turns framework, commands, pages, and analytics needs into a setup packet PMs can use without engineering translation.
           </p>
         </div>
       </div>
@@ -776,7 +776,7 @@ function SetupAssistantPanel({
               <Bot size={18} />
             </div>
             <p className="font-mono text-sm leading-relaxed text-terminal-text">
-              Welcome. I will connect the repository, scan framework and scripts, generate `exec.md`, and keep product managers away from setup chores.
+              Welcome. I will read the product context, prepare the run packet, and keep setup details out of the product decision.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <DarkQuestion text="Why connect GitHub?" />
@@ -940,10 +940,10 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
                 <Badge tone="info">PR-only review gate</Badge>
               </div>
               <h1 className="max-w-4xl font-primary text-4xl font-medium leading-tight md:text-6xl">
-                Tell Corvin what Shelfmark should do better.
+                Decide what Shelfmark should do better.
               </h1>
               <p className="mt-4 max-w-prose font-body text-base leading-relaxed text-muted-foreground">
-                Corvin turns a product-manager request into a reviewable repository change: branch, checks, screenshot, summary, and pull request.
+                Write the product change in plain language. Corvin turns it into a reviewable software change with a branch, checks, screenshot, summary, and pull request.
               </p>
             </div>
             <div className="rounded-md border border-border bg-background p-4">
