@@ -36,7 +36,6 @@ import { Button } from "./components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
 import { initializeProductAnalytics, trackProductEvent } from "./lib/analytics";
 import { cn } from "./lib/utils";
-import DemoApp from "./DemoApp";
 
 type ProductChangeRequest = {
   id: string;
@@ -152,17 +151,13 @@ const fallbackRepositories: OnboardingRepository[] = [
     buildCommand: "npm run build",
     healthUrl: "http://localhost:5173",
     productionUrl: "https://corvin.vercel.app",
-    screenshotPaths: ["/", "/demo"],
+    screenshotPaths: ["/"],
     canRunJudgeRequests: false,
     novusInstalled: false,
   },
 ];
 
 export default function App() {
-  if (window.location.pathname.replace(/\/+$/, "") === "/demo") {
-    return <DemoApp />;
-  }
-
   return <CorvinProductConsole />;
 }
 
@@ -549,13 +544,6 @@ function IntroTopBar() {
           <span className="font-primary text-2xl font-medium text-white">corvin</span>
         </div>
         <div className="flex items-center gap-3">
-          <a
-            className="hidden min-h-9 items-center gap-2 rounded-md border border-terminal-border px-3 font-primary text-xs text-terminal-text transition-colors hover:bg-[#171719] sm:flex"
-            href="/demo"
-          >
-            Demo archive
-            <ArrowUpRight size={14} />
-          </a>
           {import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ? <UserButton afterSignOutUrl="/" /> : null}
         </div>
       </div>
@@ -596,13 +584,6 @@ function OnboardingTopBar({ activeStep, completed }: { activeStep: OnboardingSte
           ))}
         </div>
         <div className="flex items-center justify-end gap-3">
-          <a
-            className="hidden min-h-9 items-center gap-2 rounded-md border border-terminal-border px-3 font-primary text-xs text-terminal-text transition-colors hover:bg-[#171719] sm:flex"
-            href="/demo"
-          >
-            Demo archive
-            <ArrowUpRight size={14} />
-          </a>
           {import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ? <UserButton afterSignOutUrl="/" /> : null}
         </div>
       </div>
