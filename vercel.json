@@ -1,8 +1,12 @@
 {
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "/api/[...path]"
+    },
+    {
       "source": "/webhooks/:path*",
-      "destination": "/api/webhooks/:path*"
+      "destination": "/api/[...path]"
     },
     {
       "source": "/:path*",
