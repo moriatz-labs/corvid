@@ -93,7 +93,7 @@ export const defaultOnboardingRepositories: OnboardingRepository[] = [
     buildCommand: "npm run build",
     healthUrl: "http://localhost:5173",
     productionUrl: "https://corvin.vercel.app",
-    screenshotPaths: ["/", "/demo"],
+    screenshotPaths: ["/"],
     canRunJudgeRequests: true,
     novusInstalled: false,
   },

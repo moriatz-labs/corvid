@@ -1,9 +1,4 @@
 import { describe, expect, it } from "vitest";
-import {
-  createConnectedDemoStartState,
-  createCorvinDemoBlueprint,
-  createDemoModeState,
-} from "../src/shared/demo";
 import { shouldRestoreGitHubSession } from "../server/github-session";
 import {
   shouldCaptureWhatsAppMessage,
@@ -35,10 +30,10 @@ import {
 import type { WorkspaceBlueprint } from "../src/shared/types";
 
 const blueprint: WorkspaceBlueprint = {
-  id: "acme-checkout",
-  name: "Acme Checkout Workspace",
+  id: "shelfmark-workspace",
+  name: "Shelfmark Workspace",
   setupStatus: "ready",
-  pmRunCommand: "npx corvin run acme-checkout",
+  pmRunCommand: "npx corvin run shelfmark-workspace",
   executionScriptSummary: "Engineering supplied the execution packet.",
   engineeringIntake: [
     {
@@ -52,20 +47,20 @@ const blueprint: WorkspaceBlueprint = {
     {
       id: "web",
       label: "Web app",
-      sourceRef: "synced-repo://acme/web",
+      sourceRef: "synced-repo://moriatz-labs/shelfmark",
       defaultBranch: "main",
       localPath: "repos/web",
-      purpose: "Checkout UI",
+      purpose: "Bookmarking UI",
       startupCommand: "pnpm dev",
       branchCoupling: "Match api branch when contracts change.",
     },
     {
       id: "api",
       label: "API",
-      sourceRef: "synced-repo://acme/api",
+      sourceRef: "synced-repo://moriatz-labs/corvid",
       defaultBranch: "main",
       localPath: "repos/api",
-      purpose: "Checkout API",
+      purpose: "Bookmarking API",
       startupCommand: "pnpm dev",
       branchCoupling: "Match web branch when contracts change.",
     },
@@ -96,11 +91,11 @@ const blueprint: WorkspaceBlueprint = {
 describe("MVP core workflow", () => {
   it("renders and parses exec.md with repositories, envs, and local run notes", () => {
     const markdown = renderExecMarkdown({
-      purpose: "Run Acme Checkout locally for PM review.",
+      purpose: "Run Shelfmark locally for PM review.",
       repositories: [
         {
           id: "web",
-          repo: "acme/web",
+          repo: "moriatz-labs/shelfmark",
           role: "frontend",
           install: "pnpm install",
           dev: "pnpm dev --host 0.0.0.0",
@@ -145,11 +140,11 @@ describe("MVP core workflow", () => {
 
   it("parses exec.md files with Windows CRLF line endings", () => {
     const markdown = renderExecMarkdown({
-      purpose: "Run checkout.",
+      purpose: "Run product.",
       repositories: [
         {
           id: "web",
-          repo: "acme/web",
+          repo: "moriatz-labs/shelfmark",
           role: "frontend",
           install: "pnpm install",
           dev: "pnpm dev",
@@ -166,7 +161,7 @@ describe("MVP core workflow", () => {
     const parsed = parseExecMarkdown(markdown);
 
     expect(parsed.ok).toBe(true);
-    expect(parsed.document?.repositories[0].repo).toBe("acme/web");
+    expect(parsed.document?.repositories[0].repo).toBe("moriatz-labs/shelfmark");
   });
 
   it("blocks exec.md submission for missing essentials and invalid env names", () => {
@@ -179,7 +174,7 @@ Run a broken workspace.
 \`\`\`yaml
 repositories:
   - id: web
-    repo: acme/web
+    repo: moriatz-labs/shelfmark
     role: frontend
     install: pnpm install
     dev: ""
@@ -214,11 +209,11 @@ Missing essentials should block save.
 
   it("requires configured values for required exec.md env vars before local run", () => {
     const parsed = parseExecMarkdown(renderExecMarkdown({
-      purpose: "Run checkout.",
+      purpose: "Run product.",
       repositories: [
         {
           id: "api",
-          repo: "acme/api",
+          repo: "moriatz-labs/corvid",
           role: "api",
           install: "pnpm install",
           dev: "pnpm dev",
@@ -250,11 +245,11 @@ Missing essentials should block save.
 
   it("builds a local run plan from exec.md when required env values are present", () => {
     const parsed = parseExecMarkdown(renderExecMarkdown({
-      purpose: "Run checkout.",
+      purpose: "Run product.",
       repositories: [
         {
           id: "web",
-          repo: "acme/web",
+          repo: "moriatz-labs/shelfmark",
           role: "frontend",
           install: "pnpm install",
           dev: "pnpm dev",
@@ -286,11 +281,11 @@ Missing essentials should block save.
 
   it("builds a per-job clone and branch plan from exec.md repositories", () => {
     const parsed = parseExecMarkdown(renderExecMarkdown({
-      purpose: "Run checkout.",
+      purpose: "Run product.",
       repositories: [
         {
           id: "web",
-          repo: "https://github.com/acme/web.git",
+          repo: "https://github.com/moriatz-labs/shelfmark.git",
           role: "frontend",
           install: "pnpm install",
           dev: "pnpm dev",
@@ -298,7 +293,7 @@ Missing essentials should block save.
         },
         {
           id: "api",
-          repo: "acme/api",
+          repo: "moriatz-labs/corvid",
           role: "api",
           install: "npm ci",
           dev: "npm run dev",
@@ -312,28 +307,28 @@ Missing essentials should block save.
       localRunNotes: "No notes.",
     }));
     const request = createWebRequest({
-      title: "Fix checkout copy",
-      body: "Change checkout headline.",
-      requester: "pm@acme.local",
+      title: "Fix product copy",
+      body: "Change product onboarding copy.",
+      requester: "pm@shelfmark.local",
       workspaceId: blueprint.id,
     });
 
     const plan = buildJobWorkspacePlan({
-      request: { ...request, id: "req_Checkout Copy!" },
+      request: { ...request, id: "req_Product Copy!" },
       document: parsed.document!,
       workspaceRoot: "C:/tmp/corvin jobs",
       createdAt: "2026-06-14T00:00:00.000Z",
     });
 
-    expect(plan.id).toBe("job_req_checkout-copy");
-    expect(plan.branchName).toBe("corvin/req_checkout-copy");
-    expect(plan.rootPath).toBe("C:/tmp/corvin jobs/job_req_checkout-copy");
+    expect(plan.id).toBe("job_req_product-copy");
+    expect(plan.branchName).toBe("corvin/req_product-copy");
+    expect(plan.rootPath).toBe("C:/tmp/corvin jobs/job_req_product-copy");
     expect(plan.repositories).toEqual([
       expect.objectContaining({
         id: "web",
-        cloneUrl: "https://github.com/acme/web.git",
-        localPath: "C:/tmp/corvin jobs/job_req_checkout-copy/repos/web",
-        branchName: "corvin/req_checkout-copy",
+        cloneUrl: "https://github.com/moriatz-labs/shelfmark.git",
+        localPath: "C:/tmp/corvin jobs/job_req_product-copy/repos/web",
+        branchName: "corvin/req_product-copy",
         installCommand: "pnpm install",
         devCommand: "pnpm dev",
         healthUrl: "http://localhost:5173",
@@ -341,16 +336,16 @@ Missing essentials should block save.
       }),
       expect.objectContaining({
         id: "api",
-        cloneUrl: "https://github.com/acme/api.git",
-        localPath: "C:/tmp/corvin jobs/job_req_checkout-copy/repos/api",
+        cloneUrl: "https://github.com/moriatz-labs/corvid.git",
+        localPath: "C:/tmp/corvin jobs/job_req_product-copy/repos/api",
       }),
     ]);
   });
 
   it("plans likely product files and copy replacement for a job request", () => {
-    const plan = createJobFileEditPlan("Change the checkout headline to explain charges clearly.");
+    const plan = createJobFileEditPlan("Change the product onboarding copy to explain research evidence clearly.");
 
-    expect(plan.replacementText).toBe("Checkout that explains every charge before you pay.");
+    expect(plan.replacementText).toBe("Research evidence, saved where product decisions happen.");
     expect(plan.targetFileHints).toContain("src/App.tsx");
     expect(plan.fallbackFile).toBe("CORVIN_CHANGE_REQUEST.md");
   });
@@ -373,11 +368,11 @@ Missing essentials should block save.
 
   it("parses exec.md fenced YAML blocks with Windows line endings", () => {
     const markdown = renderExecMarkdown({
-      purpose: "Run checkout.",
+      purpose: "Run product.",
       repositories: [
         {
           id: "web",
-          repo: "acme/web",
+          repo: "moriatz-labs/shelfmark",
           role: "frontend",
           install: "pnpm install",
           dev: "pnpm dev",
@@ -460,7 +455,7 @@ Missing essentials should block save.
   it("generates a deterministic Docker Compose file from a workspace blueprint", () => {
     const compose = generateComposeFile(blueprint);
 
-    expect(compose).toContain("name: corvin-acme-checkout");
+    expect(compose).toContain("name: corvin-shelfmark-workspace");
     expect(compose).toContain("web:");
     expect(compose).toContain("api:");
     expect(compose).toContain("5173:5173");
@@ -478,10 +473,10 @@ Missing essentials should block save.
                 messages: [
                   {
                     from: "15551234567",
-                    id: "wamid.demo",
+                    id: "wamid.product",
                     timestamp: "1765700000",
                     text: {
-                      body: "Corvin acme-checkout: change checkout headline",
+                      body: "Corvin shelfmark-workspace: change product onboarding copy",
                     },
                     type: "text",
                   },
@@ -495,9 +490,9 @@ Missing essentials should block save.
 
     expect(parsed).toEqual({
       from: "15551234567",
-      messageId: "wamid.demo",
-      text: "Corvin acme-checkout: change checkout headline",
-      workspaceHint: "acme-checkout",
+      messageId: "wamid.product",
+      text: "Corvin shelfmark-workspace: change product onboarding copy",
+      workspaceHint: "shelfmark-workspace",
     });
   });
 
@@ -505,16 +500,16 @@ Missing essentials should block save.
     const request = createRequestFromWhatsAppMessage(
       {
         from: "15551234567",
-        messageId: "wamid.demo",
-        text: "Corvin acme-checkout: change checkout headline",
-        workspaceHint: "acme-checkout",
+        messageId: "wamid.product",
+        text: "Corvin shelfmark-workspace: change product onboarding copy",
+        workspaceHint: "shelfmark-workspace",
       },
       blueprint,
     );
 
     expect(request.channel).toBe("whatsapp");
-    expect(request.workspaceId).toBe("acme-checkout");
-    expect(request.title).toBe("Change checkout headline");
+    expect(request.workspaceId).toBe("shelfmark-workspace");
+    expect(request.title).toBe("Change product onboarding copy");
     expect(request.status).toBe("captured");
   });
 
@@ -522,23 +517,23 @@ Missing essentials should block save.
     const request = createRequestFromWhatsAppMessage(
       {
         from: "15551234567",
-        messageId: "wamid.simple-demo",
-        text: "Corvin change checkout headline",
+        messageId: "wamid.simple-product",
+        text: "Corvin change product onboarding copy",
       },
       blueprint,
     );
 
-    expect(request.workspaceId).toBe("acme-checkout");
-    expect(request.title).toBe("Change checkout headline");
-    expect(request.body).toBe("change checkout headline");
+    expect(request.workspaceId).toBe("shelfmark-workspace");
+    expect(request.title).toBe("Change product onboarding copy");
+    expect(request.body).toBe("change product onboarding copy");
   });
 
   it("keeps web request capture idempotent for repeated clicks", () => {
     const request = createWebRequest({
       title: "Copy change",
-      body: "Change checkout headline.",
-      requester: "pm@demo.local",
-      workspaceId: "corvin-demo-app",
+      body: "Change product onboarding copy.",
+      requester: "pm@shelfmark.local",
+      workspaceId: "shelfmark",
     });
 
     const first = upsertPMRequest([], request);
@@ -567,13 +562,13 @@ Missing essentials should block save.
     const url = buildGitHubAuthorizeUrl({
       clientId: "client_abc",
       redirectUri: "http://localhost:8787/api/integrations/github/callback",
-      state: "corvin-local-demo",
+      state: "corvin-oauth-state",
       scopes: ["repo", "read:org"],
     });
 
     expect(url).toContain("client_id=client_abc");
     expect(url).toContain("redirect_uri=http%3A%2F%2Flocalhost%3A8787%2Fapi%2Fintegrations%2Fgithub%2Fcallback");
-    expect(url).toContain("state=corvin-local-demo");
+    expect(url).toContain("state=corvin-oauth-state");
     expect(url).toContain("scope=repo+read%3Aorg");
   });
 
@@ -601,7 +596,7 @@ Missing essentials should block save.
 
   it("accepts same-account WhatsApp demo commands and ignores bot replies", () => {
     expect(shouldCaptureWhatsAppMessage({
-      body: "Corvin change checkout headline",
+      body: "Corvin change product onboarding copy",
       messageId: "wamid.self-command",
       chatId: "15551234567@s.whatsapp.net",
       from: "15551234567",
@@ -609,7 +604,7 @@ Missing essentials should block save.
     })).toBe(true);
 
     expect(shouldCaptureWhatsAppMessage({
-      body: "Corvin captured: Change checkout headline",
+      body: "Corvin captured: Change product onboarding copy",
       messageId: "wamid.bot-reply",
       chatId: "15551234567@s.whatsapp.net",
       from: "15551234567",
@@ -617,7 +612,7 @@ Missing essentials should block save.
     })).toBe(false);
 
     expect(shouldCaptureWhatsAppMessage({
-      body: "change checkout headline",
+      body: "change product onboarding copy",
       messageId: "wamid.inbound-user",
       chatId: "15550001111@s.whatsapp.net",
       from: "15550001111",
@@ -633,9 +628,9 @@ Missing essentials should block save.
 
   it("creates an OpenAI-only change plan when no API key is available", () => {
     const plan = createOpenAIChangePlan({
-      requestBody: "Change the checkout headline to reduce confusion",
-      pmName: "Maya Rao",
-      workspaceName: "Acme Checkout Workspace",
+      requestBody: "Change the product onboarding copy to reduce confusion",
+      pmName: "Product PM",
+      workspaceName: "Shelfmark Workspace",
       openAIConfigured: false,
     });
 
@@ -655,124 +650,21 @@ Missing essentials should block save.
     const initial = createDeploymentDemoState();
     const staged = stageRequestedChange(initial, {
       requestId: "req_123",
-      requestedBy: "Maya Rao",
-      newHeadline: "Checkout that explains every charge before you pay.",
+      requestedBy: "Product PM",
+      newHeadline: "Research evidence, saved where product decisions happen.",
     });
 
-    expect(staged.local.headline).toBe("Checkout that explains every charge before you pay.");
-    expect(staged.staging.headline).toBe("Checkout that explains every charge before you pay.");
+    expect(staged.local.headline).toBe("Research evidence, saved where product decisions happen.");
+    expect(staged.staging.headline).toBe("Research evidence, saved where product decisions happen.");
     expect(staged.production.headline).toBe(initial.production.headline);
     expect(staged.staging.status).toBe("ready");
 
     const promoted = promoteStagingToProduction(staged);
 
-    expect(promoted.production.headline).toBe("Checkout that explains every charge before you pay.");
+    expect(promoted.production.headline).toBe("Research evidence, saved where product decisions happen.");
     expect(promoted.production.status).toBe("live");
     expect(promoted.auditTrail.at(-1)).toContain("production");
   });
 });
 
-describe("demo mode workflow", () => {
-  it("defines the public Corvin demo app as frontend and backend repositories", () => {
-    const blueprint = createCorvinDemoBlueprint("Paul-M-Kallarackal");
 
-    expect(blueprint.id).toBe("corvin-demo-app");
-    expect(blueprint.repositories.map((repository) => repository.id)).toEqual([
-      "frontend",
-      "backend",
-    ]);
-    expect(blueprint.repositories.map((repository) => repository.sourceRef)).toEqual([
-      "synced-repo://Paul-M-Kallarackal/corvin-demo-app-frontend",
-      "synced-repo://Paul-M-Kallarackal/corvin-demo-app-backend",
-    ]);
-    expect(blueprint.services.map((service) => service.repositoryId)).toEqual([
-      "frontend",
-      "backend",
-    ]);
-  });
-
-  it("creates a no-login connected walkthrough with a completed job", () => {
-    const state = createDemoModeState();
-    const job = state.jobs[0];
-    const parsedExec = parseExecMarkdown(state.exec.markdown);
-
-    expect(parsedExec.ok).toBe(true);
-    expect(parsedExec.document?.repositories.map((repository) => repository.id)).toEqual([
-      "frontend",
-      "backend",
-    ]);
-    expect(state.integrations.map((integration) => integration.status)).toEqual([
-      "connected",
-      "connected",
-      "ready",
-    ]);
-    expect(state.exec.exists).toBe(true);
-    expect(state.exec.validation.ready).toBe(true);
-    expect(state.requests[0]).toEqual(
-      expect.objectContaining({
-        title: "Change checkout headline",
-        status: "ready-for-context",
-      }),
-    );
-    expect(job).toEqual(
-      expect.objectContaining({
-        status: "pr-open",
-        currentAction: "Demo complete",
-      }),
-    );
-    expect(job.changedFiles).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ repositoryId: "frontend", path: "src/App.tsx", status: "modified" }),
-        expect.objectContaining({ repositoryId: "backend", path: "src/server.ts", status: "modified" }),
-      ]),
-    );
-    expect(job.reviewIterations.length).toBeGreaterThanOrEqual(3);
-    expect(job.pullRequests[0].url).toContain("github.com/Paul-M-Kallarackal/corvin-demo-app-frontend/pull/");
-    expect(state.logs).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("exec.md validated"),
-        expect.stringContaining("opened pull request"),
-      ]),
-    );
-  });
-
-  it("starts the live demo connected and waits for a real WhatsApp request", () => {
-    const state = createConnectedDemoStartState();
-    const parsedExec = parseExecMarkdown(state.exec.markdown);
-
-    expect(parsedExec.ok).toBe(true);
-    expect(state.integrations.map((integration) => integration.status)).toEqual([
-      "connected",
-      "connected",
-      "ready",
-    ]);
-    expect(state.exec.validation.ready).toBe(true);
-    expect(state.requests).toEqual([]);
-    expect(state.jobs).toEqual([]);
-    expect(canCapturePMRequest(state.workspace, state.validation, state.exec)).toBe(true);
-
-    const request = createRequestFromWhatsAppMessage(
-      {
-        from: "15551234567",
-        messageId: "wamid.live-demo",
-        text: "Corvin explain every checkout charge before payment",
-      },
-      state.workspace,
-    );
-
-    expect(request.body).toBe("explain every checkout charge before payment");
-    expect(request.workspaceId).toBe("corvin-demo-app");
-  });
-
-  it("shows the finished local, staging, and production review path", () => {
-    const state = createDemoModeState();
-
-    expect(state.deployment.local.status).toBe("ready");
-    expect(state.deployment.staging.status).toBe("ready");
-    expect(state.deployment.production.status).toBe("live");
-    expect(state.deployment.local.headline).toBe("Checkout that explains every charge before you pay.");
-    expect(state.deployment.production.headline).toBe("Checkout that explains every charge before you pay.");
-    expect(state.deployment.auditTrail.at(-1)).toContain("production");
-    expect(state.steps.every((step) => step.status === "succeeded")).toBe(true);
-  });
-});

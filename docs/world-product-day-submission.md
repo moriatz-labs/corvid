@@ -1,79 +1,68 @@
-# World Product Day Submission Handoff
+# World Product Day Submission: Corvin + Shelfmark
 
-## Public URLs
+## Public Links
 
-- Corvin PM workbench: https://corvin-two.vercel.app
-- Shelfmark bookmarking product: https://shelfmark-navy.vercel.app
-- Corvin-generated Shelfmark PR evidence: https://github.com/moriatz-labs/shelfmark/pull/8
-- Successful cloud-agent run: https://github.com/moriatz-labs/shelfmark/actions/runs/27863213750
+- Working product: https://corvin-two.vercel.app
+- Default product workspace: https://shelfmark-navy.vercel.app
+- Latest generated PR: https://github.com/moriatz-labs/shelfmark/pull/10
+- Latest cloud-agent run: https://github.com/moriatz-labs/shelfmark/actions/runs/27875171863
+- Screenshot artifact: https://github.com/moriatz-labs/shelfmark/actions/runs/27875171863/artifacts/7766415138
 
-## What We Built
+## Short Description
 
-Corvin is a product-manager workbench for requesting real changes against a real product repository. Judges sign in, connect the preset Shelfmark workspace, submit an open-text product request, and receive review evidence instead of a demo response: a branch, GitHub pull request, verification summary, and screenshot artifact.
+Corvin is a product-manager workbench that turns a plain-language product request into a reviewable software change. PMs and judges sign in, connect a product workspace, let Corvin generate the run packet, and submit a request such as a UI fix, onboarding improvement, empty-state change, or product experiment. Corvin then prepares review evidence: checks, screenshot artifact, summary, branch, and pull request. It does not merge or deploy judge-created changes.
 
-Shelfmark is the judged product Corvin modifies. It is a login-based bookmarking app for product teams saving research, launch notes, analytics references, and customer evidence. Users can save bookmarks with title, URL, collection, tags, notes, favorite state, and archived state.
+Shelfmark is the default product workspace for the demo. It is a working bookmarking app for product teams saving research, customer evidence, launch notes, and analytics references.
 
 ## Who It Is For
 
-This is for product managers and judges who want to evaluate whether an AI-assisted product workflow can move from request to reviewable software change without asking PMs to write setup instructions or touch engineering internals.
+Corvin is for product managers who see a product problem and want a concrete, reviewable change without setting up a local codebase or writing engineering handoff docs. It is also for teams that want PM-led experiments to remain safe: visible, tested, and gated by pull requests.
 
 ## Tools Used
 
 - React, TypeScript, Vite, Tailwind, shadcn-style UI, Lucide
-- Clerk for authentication
-- Supabase for Shelfmark data storage and RLS-backed tables
+- Clerk authentication
+- Supabase for Shelfmark data
 - GitHub Actions for the Shelfmark cloud agent
-- Vercel for production deployment
-- Novus/Pendo-ready analytics wrappers and event instrumentation
-- OpenAI GPT-5 Codex for implementation
+- Vercel for deployment
+- Novus/Pendo-ready analytics wrappers and event tracking
+- OpenAI GPT-5 Codex
 
-## Product Flow To Demo
+## What To Demo
 
 1. Open Corvin at https://corvin-two.vercel.app.
-2. Sign in with Clerk.
-3. Start onboarding and select the Moriatz Labs Shelfmark repository.
-4. Let Corvin scan the repository and generate `exec.md`.
-5. Continue into the Shelfmark PM workbench.
-6. Submit a product request, for example: "Make the empty state clearer for PMs reviewing saved research."
-7. Show the returned cloud-agent status and link.
-8. Open the resulting Shelfmark PR.
-9. Show the PR body: request, summary, changed files, verification, screenshot artifact, and AI attribution.
-10. Show Shelfmark remains a real deployed product at https://shelfmark-navy.vercel.app.
+2. Sign in.
+3. Start onboarding and select Shelfmark.
+4. Show Corvin scanning the workspace and generating `exec.md`.
+5. Continue into the PM workbench.
+6. Submit: `Make Shelfmark explain saved research value more clearly for product managers on first visit.`
+7. Show the cloud-agent run.
+8. Open the generated Shelfmark PR.
+9. Point out the request, summary, changed file, test/build verification, screenshot artifact, and AI model attribution.
+10. Open Shelfmark to show the actual bookmarking product.
 
-## What We Learned
+## Demo Script
 
-- PM-facing AI workflows need preset context, not blank setup forms.
-- A generated `exec.md` makes onboarding feel like Novus-style repository connection instead of engineering homework.
-- PR-only output is a strong review gate: it lets judges inspect real code changes without giving them merge or deploy power.
-- Cloud execution is essential for public judging because local-only agents cannot be used by external reviewers.
-- Analytics must be honest: Corvin now reports Novus as pending until the correct Pendo install key is present.
+Corvin is a PM workbench for turning product judgment into working software evidence. Instead of asking a PM to set up a codebase or write an engineering handoff, Corvin connects a product workspace, scans it, and generates the run packet automatically.
 
-## Current External Blockers
+For this submission, Shelfmark is the default workspace. It is a real bookmarking product for product teams collecting research and customer evidence. I can ask for a product improvement in plain language, and Corvin dispatches the Shelfmark cloud agent.
 
-- Real Novus/Pendo install key is still required. The incorrect key was removed from local env, Vercel, and GitHub Actions secrets.
-- Clerk production deploy still requires an interactive `clerk deploy` run from the account owner.
-- Submission still needs a 2-3 minute public or unlisted demo video.
-- Submission still needs a Novus dashboard screenshot after the real key is installed.
+The important part is that this is not a mock response. The agent applies a visible product change, runs tests and build, captures screenshot evidence, and opens a GitHub pull request. Corvin does not merge or deploy. The output is a review gate: a PR, screenshot, summary, and verification results that a team can inspect.
 
-## Env Slots To Fill After Account Setup
+The main learning is that PM-facing AI needs context and evidence, not a blank prompt. Corvin gives PMs a way to propose fixes, features, and experiments that are directly viewable and reviewable.
 
-Set the real Pendo install key as:
+## What I Learned
 
-```text
-VITE_NOVUS_PENDO_API_KEY=<real-pendo-install-key>
-```
+- PM-facing AI workflows need preset context rather than messy setup forms.
+- Generating `exec.md` during onboarding makes repository setup feel like a product workflow.
+- A PR-only review gate keeps PM-led changes inspectable and safe.
+- Public judging needs cloud execution, not local-only agents.
+- Analytics status must be honest: Corvin only marks Novus/Pendo active when the real install key is configured.
 
-Locations:
+## Final Submission Checklist
 
-- Corvin Vercel production and development
-- Shelfmark Vercel production and development
-- Shelfmark GitHub Actions secret
-- Local `.env` files for Corvin and Shelfmark
-
-After the key is set, update Corvin:
-
-```text
-SHELFMARK_NOVUS_INSTALLED=true
-```
-
-Then redeploy both apps.
+- Public working URL: Corvin production URL.
+- Demo video: record using the script above.
+- PR evidence: Shelfmark PR #10.
+- Novus/Pendo screenshot: capture from Novus dashboard after installing the real key.
+- Written description: use the Short Description, Who It Is For, Tools Used, and What I Learned sections above.

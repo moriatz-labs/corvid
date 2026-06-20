@@ -537,8 +537,9 @@ export function createJobFileEditPlan(requestBody: string): JobFileEditPlan {
     "pages/index.tsx",
     "pages/index.jsx",
     "src/pages/index.tsx",
-    "src/components/Checkout.tsx",
-    "src/components/Checkout.jsx",
+    "src/components/Home.tsx",
+    "src/components/BookmarkList.tsx",
+    "src/components/Onboarding.tsx",
   ];
 
   if (lower.includes("api") || lower.includes("bug")) {
@@ -608,31 +609,31 @@ export function createDeploymentDemoState(): DeploymentDemoState {
     local: {
       id: "local",
       label: "Local preview",
-      url: "http://localhost:5173/preview/checkout",
+      url: "http://localhost:5175",
       status: "idle",
-      headline: "Checkout built for fast-growing teams.",
-      subcopy: "Review your order, confirm your plan, and complete payment in one place.",
-      lastUpdatedBy: "Engineering blueprint",
+      headline: "Save research where product decisions happen.",
+      subcopy: "Collect bookmarks, notes, tags, and customer evidence in one product workspace.",
+      lastUpdatedBy: "Shelfmark baseline",
     },
     staging: {
       id: "staging",
-      label: "Staging app",
-      url: "https://staging.corvin-demo.app/checkout",
+      label: "Review preview",
+      url: "https://shelfmark-navy.vercel.app",
       status: "idle",
-      headline: "Checkout built for fast-growing teams.",
-      subcopy: "Review your order, confirm your plan, and complete payment in one place.",
-      lastUpdatedBy: "Last deployed build",
+      headline: "Save research where product decisions happen.",
+      subcopy: "Collect bookmarks, notes, tags, and customer evidence in one product workspace.",
+      lastUpdatedBy: "Current review build",
     },
     production: {
       id: "production",
       label: "Production app",
-      url: "https://corvin-demo.app/checkout",
+      url: "https://shelfmark-navy.vercel.app",
       status: "live",
-      headline: "Checkout built for fast-growing teams.",
-      subcopy: "Review your order, confirm your plan, and complete payment in one place.",
+      headline: "Save research where product decisions happen.",
+      subcopy: "Collect bookmarks, notes, tags, and customer evidence in one product workspace.",
       lastUpdatedBy: "Current production",
     },
-    auditTrail: ["Production app is live with the original checkout copy."],
+    auditTrail: ["Production app is live with the baseline Shelfmark copy."],
   };
 }
 
@@ -674,7 +675,7 @@ export function promoteStagingToProduction(state: DeploymentDemoState): Deployme
     },
     auditTrail: [
       ...state.auditTrail,
-      `Promoted staging checkout copy to the production app.`,
+      `Promoted reviewed product copy to the production app.`,
     ],
   };
 }
@@ -727,13 +728,13 @@ function joinPath(...parts: string[]) {
 
 function inferHeadline(requestBody: string): string {
   const lower = requestBody.toLowerCase();
-  if (lower.includes("charge") || lower.includes("confus")) {
-    return "Checkout that explains every charge before you pay.";
+  if (lower.includes("research") || lower.includes("evidence")) {
+    return "Research evidence, saved where product decisions happen.";
   }
   if (lower.includes("headline") || lower.includes("copy")) {
-    return "Checkout that makes the next step obvious.";
+    return "Product context that makes the next step obvious.";
   }
-  return "Checkout that helps customers finish with confidence.";
+  return "A product workspace that turns requests into reviewable change.";
 }
 
 function extractMarkdownSection(markdown: string, heading: string): string {
