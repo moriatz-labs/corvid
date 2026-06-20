@@ -60,11 +60,17 @@ SHELFMARK_GITHUB_REPO=moriatz-labs/shelfmark
 SHELFMARK_LOCAL_PATH=C:/Users/loqpm/Documents/Shelfmark
 SHELFMARK_PRODUCTION_URL=https://shelfmark.vercel.app
 SHELFMARK_NOVUS_INSTALLED=true
+SHELFMARK_AGENT_MODE=github-actions
+SHELFMARK_AGENT_WORKFLOW=corvin-cloud-agent.yml
 ```
 
 Safety guardrails block requests that try to read secrets, edit environment
 files, delete repositories, merge, or deploy production. Corvin creates PRs only;
 it does not merge or deploy judge-created changes.
+
+By default, Corvin dispatches the Shelfmark GitHub Actions cloud agent. Set
+`SHELFMARK_AGENT_MODE=local` only when you want to run the older local clone,
+test, screenshot, and PR flow from this machine.
 
 ## Deploy
 

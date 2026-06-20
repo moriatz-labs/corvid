@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  createShelfmarkCloudAgentDispatch,
+  createShelfmarkCloudAgentUrl,
   createShelfmarkJudgeRequest,
   isBlockedShelfmarkRequest,
   renderShelfmarkNoticeModule,
@@ -29,6 +31,33 @@ describe("Shelfmark judge workflow", () => {
     );
     expect(request.workspace.repo).toBe("moriatz-labs/shelfmark");
     expect(request.workspace.localPath).toContain("Shelfmark");
+  });
+
+  it("builds a GitHub Actions workflow dispatch payload for cloud agents", () => {
+    const request = createShelfmarkJudgeRequest({
+      body: "Make the onboarding copy clearer for product managers.",
+      requester: "judge@example.com",
+      now: "2026-06-20T00:00:00.000Z",
+    });
+
+    const dispatch = createShelfmarkCloudAgentDispatch(request);
+
+    expect(dispatch.url).toBe(
+      "https://api.github.com/repos/moriatz-labs/shelfmark/actions/workflows/corvin-cloud-agent.yml/dispatches",
+    );
+    expect(dispatch.body).toEqual({
+      ref: "main",
+      inputs: {
+        request_id: request.id,
+        requester: "judge@example.com",
+        request_body: "Make the onboarding copy clearer for product managers.",
+        branch_prefix: "feature/shelfmark-judge",
+        base_branch: "main",
+      },
+    });
+    expect(createShelfmarkCloudAgentUrl(request)).toBe(
+      "https://github.com/moriatz-labs/shelfmark/actions/workflows/corvin-cloud-agent.yml",
+    );
   });
 
   it("renders a visible Shelfmark product notice module from the request", () => {

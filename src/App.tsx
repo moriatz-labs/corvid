@@ -60,6 +60,7 @@ type ShelfmarkJudgeRequest = {
   status: "queued" | "blocked" | "running" | "pr-open" | "failed";
   summary: string;
   pullRequestUrl?: string;
+  cloudRunUrl?: string;
   screenshots: string[];
   changedFiles: string[];
   verification: string[];
@@ -976,6 +977,12 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
               {latestRequest.pullRequestUrl ? (
                 <a className="flex min-h-12 items-center justify-between rounded-md border border-border bg-primary px-4 py-3 font-primary text-sm text-primary-text" href={latestRequest.pullRequestUrl} target="_blank" rel="noreferrer">
                   Open pull request
+                  <ArrowUpRight size={16} />
+                </a>
+              ) : null}
+              {latestRequest.cloudRunUrl ? (
+                <a className="flex min-h-12 items-center justify-between rounded-md border border-border bg-background px-4 py-3 font-primary text-sm text-foreground hover:bg-muted" href={latestRequest.cloudRunUrl} target="_blank" rel="noreferrer">
+                  Open cloud agent run
                   <ArrowUpRight size={16} />
                 </a>
               ) : null}

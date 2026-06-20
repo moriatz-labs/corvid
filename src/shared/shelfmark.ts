@@ -25,12 +25,29 @@ export type ShelfmarkJudgeRequest = {
   workspace: ShelfmarkWorkspacePreset;
   summary: string;
   pullRequestUrl?: string;
+  cloudRunUrl?: string;
   screenshots: string[];
   changedFiles: string[];
   verification: string[];
   createdAt: string;
   updatedAt: string;
   blockedReason?: string;
+};
+
+export type ShelfmarkCloudAgentDispatch = {
+  workflow: string;
+  repo: string;
+  url: string;
+  body: {
+    ref: string;
+    inputs: {
+      request_id: string;
+      requester: string;
+      request_body: string;
+      branch_prefix: string;
+      base_branch: string;
+    };
+  };
 };
 
 export const shelfmarkWorkspacePreset: ShelfmarkWorkspacePreset = {
@@ -103,6 +120,33 @@ export function createShelfmarkJudgeRequest(input: {
     updatedAt: now,
     blockedReason: guardrail.reason,
   };
+}
+
+export function createShelfmarkCloudAgentDispatch(
+  request: ShelfmarkJudgeRequest,
+  workflow = "corvin-cloud-agent.yml",
+): ShelfmarkCloudAgentDispatch {
+  const repo = request.workspace.repo.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+  return {
+    workflow,
+    repo,
+    url: `https://api.github.com/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`,
+    body: {
+      ref: request.workspace.defaultBranch,
+      inputs: {
+        request_id: request.id,
+        requester: request.requester,
+        request_body: request.body,
+        branch_prefix: request.workspace.branchPrefix,
+        base_branch: request.workspace.defaultBranch,
+      },
+    },
+  };
+}
+
+export function createShelfmarkCloudAgentUrl(request: ShelfmarkJudgeRequest, workflow = "corvin-cloud-agent.yml") {
+  const repo = request.workspace.repo.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+  return `https://github.com/${repo}/actions/workflows/${workflow}`;
 }
 
 export function renderShelfmarkNoticeModule(input: { body: string; requester: string }): string {

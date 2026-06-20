@@ -34,6 +34,8 @@ import {
   createPublicInitialState,
 } from "../src/shared/demo.js";
 import {
+  createShelfmarkCloudAgentDispatch,
+  createShelfmarkCloudAgentUrl,
   createShelfmarkJudgeRequest,
   renderShelfmarkNoticeModule,
   renderShelfmarkPullRequestBody,
@@ -202,7 +204,11 @@ app.post("/api/shelfmark/requests", async (request, response) => {
   }
 
   try {
-    await runShelfmarkJudgeRequest(judgeRequest);
+    if (shouldUseShelfmarkCloudAgent()) {
+      await dispatchShelfmarkCloudAgentRequest(judgeRequest);
+    } else {
+      await runShelfmarkJudgeRequest(judgeRequest);
+    }
     response.json(judgeRequest);
   } catch (error) {
     judgeRequest.status = "failed";
@@ -900,6 +906,10 @@ function getGitHubCloneToken() {
   return githubConnection.accessToken ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
 }
 
+function shouldUseShelfmarkCloudAgent() {
+  return (process.env.SHELFMARK_AGENT_MODE ?? "github-actions").toLowerCase() !== "local";
+}
+
 function createPlannedJob(request: MvpState["requests"][number], document: ExecDocument): JobRunState {
   const now = new Date().toISOString();
   const plan = buildJobWorkspacePlan({
@@ -1114,6 +1124,46 @@ async function runShelfmarkJudgeRequest(judgeRequest: ShelfmarkJudgeRequest) {
   judgeRequest.summary = "Shelfmark PR opened with verification and screenshot evidence.";
   judgeRequest.updatedAt = new Date().toISOString();
   state.logs.unshift(`[shelfmark] opened ${pullRequest.html_url}`);
+}
+
+async function dispatchShelfmarkCloudAgentRequest(judgeRequest: ShelfmarkJudgeRequest) {
+  const token = getGitHubCloneToken();
+  if (!token) {
+    throw new Error("Set GITHUB_TOKEN before Corvin can dispatch the Shelfmark cloud agent.");
+  }
+
+  judgeRequest.status = "running";
+  judgeRequest.summary = "Shelfmark cloud agent dispatched in GitHub Actions.";
+  judgeRequest.changedFiles = [judgeRequest.workspace.noticeFile];
+  judgeRequest.verification = ["GitHub Actions cloud agent: dispatched"];
+  judgeRequest.cloudRunUrl = createShelfmarkCloudAgentUrl(
+    judgeRequest,
+    process.env.SHELFMARK_AGENT_WORKFLOW ?? "corvin-cloud-agent.yml",
+  );
+  judgeRequest.updatedAt = new Date().toISOString();
+
+  const dispatch = createShelfmarkCloudAgentDispatch(
+    judgeRequest,
+    process.env.SHELFMARK_AGENT_WORKFLOW ?? "corvin-cloud-agent.yml",
+  );
+  const response = await fetch(dispatch.url, {
+    method: "POST",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "User-Agent": "corvin-cloud-agent-dispatcher",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify(dispatch.body),
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { message?: string };
+    throw new Error(payload.message ?? `GitHub Actions dispatch failed with ${response.status}`);
+  }
+
+  state.logs.unshift(`[shelfmark] dispatched cloud agent for ${judgeRequest.id}`);
 }
 
 async function captureShelfmarkEvidenceScreenshot(judgeRequest: ShelfmarkJudgeRequest) {
