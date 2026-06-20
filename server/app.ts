@@ -37,15 +37,17 @@ import {
   createShelfmarkCloudAgentDispatch,
   createShelfmarkCloudAgentUrl,
   createShelfmarkJudgeRequest,
+  isBlockedShelfmarkRequest,
   renderShelfmarkNoticeModule,
   renderShelfmarkPullRequestBody,
   shelfmarkWorkspacePreset,
   type ShelfmarkJudgeRequest,
 } from "../src/shared/shelfmark.js";
 import {
-  defaultOnboardingRepositories,
+  buildOnboardingRepositories,
   findOnboardingRepository,
   generateOnboardingScan,
+  type OnboardingRepository,
 } from "../src/shared/onboarding.js";
 import type {
   ExecDocument,
@@ -156,19 +158,21 @@ app.get("/api/shelfmark/requests", (_request, response) => {
 });
 
 app.get("/api/onboarding/repositories", (_request, response) => {
+  const repositories = getOnboardingRepositories();
   response.json({
-    account: "moriatz-labs",
-    repositories: defaultOnboardingRepositories,
+    account: repositories[0]?.account ?? "connected",
+    repositories,
     githubReady: Boolean(getGitHubCloneToken()),
   });
 });
 
 app.post("/api/onboarding/scan", (request, response) => {
-  const repository = findOnboardingRepository(String(request.body.repositoryId ?? request.body.repo ?? ""));
+  const repositories = getOnboardingRepositories();
+  const repository = findOnboardingRepository(String(request.body.repositoryId ?? request.body.repo ?? ""), repositories);
   if (!repository) {
     response.status(404).json({
       error: "repository_not_found",
-      message: "Select a repository from the Moriatz Labs onboarding list.",
+      message: "Select a product from the connected workspace list.",
     });
     return;
   }
@@ -182,7 +186,7 @@ app.post("/api/onboarding/scan", (request, response) => {
 
   writeFileSync(execFileUrl, scan.execMarkdown, "utf8");
   applyExecDocument(scan.execDocument, scan.execMarkdown);
-  state.logs.unshift(`[onboarding] Corvin AI generated exec.md for ${repository.repo}`);
+  state.logs.unshift(`[onboarding] Corvin AI generated exec.md for ${repository.label}`);
 
   response.json({
     ...scanResult,
@@ -204,11 +208,7 @@ app.post("/api/shelfmark/requests", async (request, response) => {
   }
 
   try {
-    if (shouldUseShelfmarkCloudAgent()) {
-      await dispatchShelfmarkCloudAgentRequest(judgeRequest);
-    } else {
-      await runShelfmarkJudgeRequest(judgeRequest);
-    }
+    await runShelfmarkRequestLifecycle(judgeRequest);
     response.json(judgeRequest);
   } catch (error) {
     judgeRequest.status = "failed";
@@ -216,6 +216,102 @@ app.post("/api/shelfmark/requests", async (request, response) => {
     judgeRequest.updatedAt = new Date().toISOString();
     state.logs.unshift(`[shelfmark] ${judgeRequest.id} failed: ${judgeRequest.summary}`);
     response.status(502).json(judgeRequest);
+  }
+});
+
+app.post("/api/product-workspaces/:repositoryId/requests", async (request, response) => {
+  const repositories = getOnboardingRepositories();
+  const repository = findOnboardingRepository(String(request.params.repositoryId ?? ""), repositories);
+  if (!repository) {
+    response.status(404).json({
+      error: "workspace_not_found",
+      message: "Select a connected product workspace before submitting a request.",
+    });
+    return;
+  }
+
+  const body = String(request.body.body ?? "");
+  const requester = String(request.body.requester ?? "pm@local");
+
+  if (repository.id === "shelfmark") {
+    const judgeRequest = createShelfmarkJudgeRequest({ body, requester });
+    shelfmarkRequests.unshift(judgeRequest);
+    if (judgeRequest.status === "blocked") {
+      response.status(409).json(toShelfmarkProductResponse(judgeRequest));
+      return;
+    }
+
+    try {
+      await runShelfmarkRequestLifecycle(judgeRequest);
+      response.json(toShelfmarkProductResponse(judgeRequest));
+    } catch (error) {
+      judgeRequest.status = "failed";
+      judgeRequest.summary = error instanceof Error ? error.message : "Shelfmark request failed.";
+      judgeRequest.updatedAt = new Date().toISOString();
+      response.status(502).json(toShelfmarkProductResponse(judgeRequest));
+    }
+    return;
+  }
+
+  const guardrail = isBlockedShelfmarkRequest(body);
+  if (guardrail.blocked) {
+    response.status(409).json({
+      id: `blocked_${Date.now()}`,
+      requester,
+      body: body.trim(),
+      productName: repository.label,
+      status: "blocked",
+      summary: "Request blocked by Corvin safety guardrails.",
+      screenshots: [],
+      changedFiles: [],
+      verification: [],
+      blockedReason: guardrail.reason,
+    });
+    return;
+  }
+
+  const scan = generateOnboardingScan(repository);
+  writeFileSync(execFileUrl, scan.execMarkdown, "utf8");
+  applyExecDocument(scan.execDocument, scan.execMarkdown);
+  state.logs.unshift(`[onboarding] Corvin AI generated exec.md for ${repository.label}`);
+
+  const pmRequest = createWebRequest({
+    title: createProductRequestTitle(body),
+    body,
+    requester,
+    workspaceId: state.workspace.id,
+  });
+  const next = upsertPMRequest(state.requests, pmRequest);
+  state.requests = next.requests;
+  if (next.inserted) {
+    updateStep("request", "succeeded");
+    updateStep("handoff", "succeeded");
+  }
+
+  const token = getGitHubCloneToken();
+  if (!token) {
+    const job = createBlockedJob(pmRequest, scan.execDocument, "Connect GitHub or set GITHUB_TOKEN before Corvin can create branches and PRs.");
+    state.jobs.unshift(job);
+    response.status(409).json(toGenericProductResponse(repository, pmRequest, job));
+    return;
+  }
+
+  const job = createPlannedJob(pmRequest, scan.execDocument);
+  state.jobs.unshift(job);
+  state.running = true;
+
+  try {
+    await cloneJobRepositories(job, token);
+    await startJobRepositories(job);
+    await applyJobChange(job, pmRequest, "");
+    await createPullRequestsForJob(job, token);
+    response.json(toGenericProductResponse(repository, pmRequest, job));
+  } catch (error) {
+    job.status = "failed";
+    job.currentAction = error instanceof Error ? redactToken(error.message, token) : "Product workspace request failed.";
+    job.logs.unshift(job.currentAction);
+    job.updatedAt = new Date().toISOString();
+    response.status(502).json(toGenericProductResponse(repository, pmRequest, job));
   }
 });
 
@@ -906,8 +1002,74 @@ function getGitHubCloneToken() {
   return githubConnection.accessToken ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
 }
 
+function getOnboardingRepositories() {
+  return buildOnboardingRepositories(process.env.CORVIN_ONBOARDING_REPOSITORIES);
+}
+
 function shouldUseShelfmarkCloudAgent() {
   return (process.env.SHELFMARK_AGENT_MODE ?? "github-actions").toLowerCase() !== "local";
+}
+
+async function runShelfmarkRequestLifecycle(judgeRequest: ShelfmarkJudgeRequest) {
+  if (shouldUseShelfmarkCloudAgent()) {
+    await dispatchShelfmarkCloudAgentRequest(judgeRequest);
+    return;
+  }
+  await runShelfmarkJudgeRequest(judgeRequest);
+}
+
+function createProductRequestTitle(body: string) {
+  const normalized = body.trim().replace(/\s+/g, " ");
+  return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized || "Product request";
+}
+
+function toShelfmarkProductResponse(request: ShelfmarkJudgeRequest) {
+  return {
+    id: request.id,
+    requester: request.requester,
+    body: request.body,
+    productName: request.workspace.name,
+    status: request.status,
+    summary: request.summary,
+    pullRequestUrl: request.pullRequestUrl,
+    cloudRunUrl: request.cloudRunUrl,
+    screenshots: request.screenshots,
+    changedFiles: request.changedFiles,
+    verification: request.verification,
+    blockedReason: request.blockedReason,
+  };
+}
+
+function toGenericProductResponse(
+  repository: OnboardingRepository,
+  request: MvpState["requests"][number],
+  job: JobRunState,
+) {
+  return {
+    id: request.id,
+    requester: request.requester,
+    body: request.body,
+    productName: repository.label,
+    status: mapProductRequestStatus(job.status),
+    summary: job.reviewPackage?.fixed || job.currentAction,
+    pullRequestUrl: job.pullRequests[0]?.url,
+    cloudRunUrl: undefined,
+    screenshots: job.reviewPackage?.screenshots.map((screenshot) => screenshot.url) ?? [],
+    changedFiles: job.changedFiles.map((file) => `${file.repositoryId}/${file.path}`),
+    verification: [
+      ...job.plan.repositories.map((item) => `${item.id}: ${item.status}`),
+      ...job.pullRequests.map((item) => `PR opened: ${item.url}`),
+    ],
+    blockedReason: job.status === "blocked" ? job.currentAction : undefined,
+  };
+}
+
+function mapProductRequestStatus(status: JobRunState["status"]) {
+  if (status === "pr-open") return "pr-open";
+  if (status === "blocked") return "blocked";
+  if (status === "failed") return "failed";
+  if (status === "waiting-for-approval" || status === "healthy") return "running";
+  return "queued";
 }
 
 function createPlannedJob(request: MvpState["requests"][number], document: ExecDocument): JobRunState {

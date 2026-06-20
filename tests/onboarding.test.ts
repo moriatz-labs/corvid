@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildOnboardingRepositories,
   defaultOnboardingRepositories,
   generateOnboardingScan,
 } from "../src/shared/onboarding";
@@ -43,5 +44,36 @@ describe("repository onboarding", () => {
     );
     expect(validateExecDocument(parsed.document!, {}).ready).toBe(true);
     expect(scan.execMarkdown).toContain("Novus/Pendo analytics");
+  });
+
+  it("allows additional connected product workspaces to be configured", () => {
+    const repositories = buildOnboardingRepositories(JSON.stringify([
+      {
+        id: "roadmap-lab",
+        account: "moriatz-labs",
+        name: "roadmap-lab",
+        label: "Roadmap Lab",
+        repo: "moriatz-labs/roadmap-lab",
+        description: "Experiment planning product workspace.",
+        framework: "Next.js",
+        installCommand: "pnpm install",
+        devCommand: "pnpm dev",
+        testCommand: "pnpm test",
+        buildCommand: "pnpm build",
+        healthUrl: "http://localhost:3001",
+        screenshotPaths: ["/", "/experiments"],
+      },
+    ]));
+
+    expect(repositories.map((repository) => repository.id)).toEqual(
+      expect.arrayContaining(["shelfmark", "roadmap-lab"]),
+    );
+    expect(repositories.find((repository) => repository.id === "roadmap-lab")).toEqual(
+      expect.objectContaining({
+        label: "Roadmap Lab",
+        repo: "moriatz-labs/roadmap-lab",
+        canRunJudgeRequests: true,
+      }),
+    );
   });
 });

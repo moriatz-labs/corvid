@@ -38,26 +38,11 @@ import { initializeProductAnalytics, trackProductEvent } from "./lib/analytics";
 import { cn } from "./lib/utils";
 import DemoApp from "./DemoApp";
 
-type ShelfmarkWorkspace = {
-  id: "shelfmark";
-  name: "Shelfmark";
-  repo: string;
-  defaultBranch: string;
-  branchPrefix: string;
-  localPath: string;
-  productionUrl: string;
-  installCommand: string;
-  testCommand: string;
-  buildCommand: string;
-  screenshotPath: string;
-  noticeFile: string;
-  novusInstalled: boolean;
-};
-
-type ShelfmarkJudgeRequest = {
+type ProductChangeRequest = {
   id: string;
   requester: string;
   body: string;
+  productName?: string;
   status: "queued" | "blocked" | "running" | "pr-open" | "failed";
   summary: string;
   pullRequestUrl?: string;
@@ -69,8 +54,7 @@ type ShelfmarkJudgeRequest = {
 };
 
 type ShelfmarkWorkspaceResponse = {
-  workspace: ShelfmarkWorkspace;
-  requests: ShelfmarkJudgeRequest[];
+  requests: ProductChangeRequest[];
   githubReady: boolean;
 };
 
@@ -127,22 +111,6 @@ type OnboardingScanResult = {
 };
 
 type OnboardingStep = "connect" | "scan" | "install";
-
-const fallbackWorkspace: ShelfmarkWorkspace = {
-  id: "shelfmark",
-  name: "Shelfmark",
-  repo: "moriatz-labs/shelfmark",
-  defaultBranch: "main",
-  branchPrefix: "feature/shelfmark-judge",
-  localPath: "C:/Users/loqpm/Documents/Shelfmark",
-  productionUrl: "https://shelfmark.vercel.app",
-  installCommand: "npm install",
-  testCommand: "npm test",
-  buildCommand: "npm run build",
-  screenshotPath: "/",
-  noticeFile: "src/content/judge-request.ts",
-  novusInstalled: false,
-};
 
 const starterRequest = "Make Shelfmark's onboarding clearer for product managers saving research and customer evidence.";
 const trackedLoginIds = new Set<string>();
@@ -360,8 +328,14 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
   if (onboardingComplete) {
     return (
       <div className="min-h-screen bg-background text-foreground">
-        <WorkbenchHeader activeStep="install" />
-        <JudgeConsole requester={requester} authMode={authMode} />
+        <WorkbenchHeader activeStep="install" productName={scan?.repository.label ?? selectedRepository.label} />
+        <JudgeConsole
+          requester={requester}
+          authMode={authMode}
+          scan={scan}
+          selectedRepository={scan?.repository ?? selectedRepository}
+          githubReadyFromOnboarding={githubReady}
+        />
       </div>
     );
   }
@@ -392,7 +366,7 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
                     </div>
                     <div>
                       <h2 className="font-primary text-lg font-medium text-white">Choose a product workspace</h2>
-                      <p className="mt-1 font-body text-sm text-terminal-muted">{repositories.length} available Moriatz Labs products</p>
+                      <p className="mt-1 font-body text-sm text-terminal-muted">{repositories.length} connected products</p>
                     </div>
                   </div>
                   <DarkPill tone={githubReady ? "success" : "neutral"}>{githubReady ? "GitHub token ready" : "GitHub public sync"}</DarkPill>
@@ -636,7 +610,7 @@ function OnboardingTopBar({ activeStep, completed }: { activeStep: OnboardingSte
   );
 }
 
-function WorkbenchHeader({ activeStep }: { activeStep: OnboardingStep }) {
+function WorkbenchHeader({ activeStep, productName }: { activeStep: OnboardingStep; productName: string }) {
   return (
     <header className="border-b border-border bg-card">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 md:px-8">
@@ -647,7 +621,7 @@ function WorkbenchHeader({ activeStep }: { activeStep: OnboardingStep }) {
           <img src="/corvin-logo.png" alt="Corvin" className="size-10 rounded-md border border-border object-cover" />
           <div>
             <p className="font-primary text-lg font-medium">Corvin</p>
-            <p className="font-body text-xs text-muted-foreground">Shelfmark PM workbench</p>
+            <p className="font-body text-xs text-muted-foreground">{productName} PM workbench</p>
           </div>
         </div>
         <div className="hidden items-center gap-2 lg:flex">
@@ -785,7 +759,7 @@ function SetupAssistantPanel({
           </div>
 
           <div className="mt-5 grid gap-3">
-            <AssistantRow active={activeStep === "connect"} complete={Boolean(scan)} icon={<Github size={16} />} title="Connect" body="Select the Moriatz Labs product PMs will improve." />
+            <AssistantRow active={activeStep === "connect"} complete={Boolean(scan)} icon={<Github size={16} />} title="Connect" body="Select the connected product PMs will improve." />
             <AssistantRow active={activeStep === "scan"} complete={Boolean(scan)} icon={<Search size={16} />} title="Scan" body="Infer framework, commands, health URL, pages, and env keys." />
             <AssistantRow active={activeStep === "install"} complete={Boolean(scan)} icon={<FileText size={16} />} title="Install" body="Write exec.md and unlock the PM change workbench." />
           </div>
@@ -852,34 +826,61 @@ function DarkQuestion({ text }: { text: string }) {
   return <span className="rounded-md border border-terminal-border bg-[#202022] px-2 py-1 font-mono text-[11px] text-terminal-text">{text}</span>;
 }
 
-function JudgeConsole({ requester, authMode }: { requester: string; authMode: string }) {
-  const [workspace, setWorkspace] = useState<ShelfmarkWorkspace>(fallbackWorkspace);
-  const [githubReady, setGithubReady] = useState(false);
-  const [recentRequests, setRecentRequests] = useState<ShelfmarkJudgeRequest[]>([]);
+function JudgeConsole({
+  requester,
+  authMode,
+  scan,
+  selectedRepository,
+  githubReadyFromOnboarding,
+}: {
+  requester: string;
+  authMode: string;
+  scan: OnboardingScanResult | null;
+  selectedRepository: OnboardingRepository;
+  githubReadyFromOnboarding: boolean;
+}) {
+  const product = scan?.repository ?? selectedRepository;
+  const productUrl = product.productionUrl ?? product.healthUrl;
+  const [githubReady, setGithubReady] = useState(githubReadyFromOnboarding);
+  const [recentRequests, setRecentRequests] = useState<ProductChangeRequest[]>([]);
   const [requestBody, setRequestBody] = useState(starterRequest);
-  const [result, setResult] = useState<ShelfmarkJudgeRequest | null>(null);
+  const [result, setResult] = useState<ProductChangeRequest | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setGithubReady(githubReadyFromOnboarding);
+  }, [githubReadyFromOnboarding]);
+
+  useEffect(() => {
+    setResult(null);
+    setRecentRequests([]);
+    setRequestBody(
+      product.id === "shelfmark"
+        ? starterRequest
+        : `Improve ${product.label}'s first-run experience so a product manager can understand what changed and why.`,
+    );
+  }, [product.id, product.label]);
+
+  useEffect(() => {
+    if (product.id !== "shelfmark") return;
     let cancelled = false;
     async function loadWorkspace() {
       try {
         const payload = await api<ShelfmarkWorkspaceResponse>("/api/shelfmark/workspace");
         if (cancelled) return;
-        setWorkspace(payload.workspace);
         setGithubReady(payload.githubReady);
         setRecentRequests(payload.requests);
-        trackProductEvent("corvin_shelfmark_workspace_loaded", {
-          repository: payload.workspace.repo,
+        trackProductEvent("corvin_product_workspace_loaded", {
+          product: product.label,
+          repository: product.repo,
           githubReady: payload.githubReady,
-          novusInstalled: payload.workspace.novusInstalled,
+          novusInstalled: product.novusInstalled,
           recentRequestCount: payload.requests.length,
         });
       } catch {
         if (!cancelled) {
-          setWorkspace(fallbackWorkspace);
-          setGithubReady(false);
+          setGithubReady(githubReadyFromOnboarding);
         }
       }
     }
@@ -888,7 +889,7 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [githubReadyFromOnboarding, product.id, product.label, product.novusInstalled, product.repo]);
 
   const latestRequest = result ?? recentRequests[0] ?? null;
   const canSubmit = requestBody.trim().length >= 12 && !loading;
@@ -900,15 +901,17 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
     setResult(null);
 
     try {
-      const response = await fetch("/api/shelfmark/requests", {
+      const response = await fetch(`/api/product-workspaces/${encodeURIComponent(product.id)}/requests`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requester, body: requestBody }),
       });
-      const payload = (await response.json()) as ShelfmarkJudgeRequest;
+      const payload = (await response.json()) as ProductChangeRequest;
       setResult(payload);
       setRecentRequests((current) => [payload, ...current.filter((request) => request.id !== payload.id)]);
-      trackProductEvent("corvin_shelfmark_request_submitted", {
+      trackProductEvent("corvin_product_request_submitted", {
+        product: product.label,
+        repository: product.repo,
         requestLength: requestBody.trim().length,
         status: payload.status,
         hasCloudRun: Boolean(payload.cloudRunUrl),
@@ -917,10 +920,10 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
         verificationCount: payload.verification.length,
       });
       if (!response.ok) {
-        setError(payload.blockedReason ?? payload.summary ?? "Corvin could not complete the Shelfmark request.");
+        setError(payload.blockedReason ?? payload.summary ?? `Corvin could not complete the ${product.label} request.`);
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Corvin could not complete the Shelfmark request.");
+      setError(caught instanceof Error ? caught.message : `Corvin could not complete the ${product.label} request.`);
     } finally {
       setLoading(false);
     }
@@ -934,12 +937,12 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
             <div>
               <div className="mb-4 flex flex-wrap items-center gap-2">
                 <Badge tone={githubReady ? "success" : "warning"}>{githubReady ? "GitHub ready" : "GitHub token needed"}</Badge>
-                <Badge tone={workspace.novusInstalled ? "success" : "neutral"}>{workspace.novusInstalled ? "Novus installed" : "Novus pending"}</Badge>
-                <Badge tone="info">exec.md generated</Badge>
-                <Badge tone="info">PR-only review gate</Badge>
+                <Badge tone={product.novusInstalled ? "success" : "neutral"}>{product.novusInstalled ? "Novus installed" : "Novus pending"}</Badge>
+                <Badge tone="info">Run packet ready</Badge>
+                <Badge tone="info">{product.id === "shelfmark" ? "Cloud agent ready" : "Local agent ready"}</Badge>
               </div>
               <h1 className="max-w-4xl font-primary text-4xl font-medium leading-tight md:text-6xl">
-                Decide what Shelfmark should do better.
+                Decide what {product.label} should do better.
               </h1>
               <p className="mt-4 max-w-prose font-body text-base leading-relaxed text-muted-foreground">
                 Describe the problem, feature, or experiment in plain language. Corvin turns it into a visible product change with checks, screenshot, summary, and pull request.
@@ -963,12 +966,12 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
             </label>
             <div className="grid gap-3 rounded-md border border-border bg-background p-4 md:grid-cols-3">
               <PlainStep icon={<FileText size={17} />} title="Write naturally" body="Ask for copy, flow, UI, empty-state, or clarity improvements." />
-              <PlainStep icon={<GitBranch size={17} />} title="Corvin changes Shelfmark" body="The request becomes a visible product update behind a review gate." />
+              <PlainStep icon={<GitBranch size={17} />} title={`Corvin changes ${product.label}`} body="The request becomes a visible product update behind a review gate." />
               <PlainStep icon={<GitPullRequest size={17} />} title="Review evidence" body="You get a PR, screenshot, summary, and verification checks for the proposed change." />
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <Button className="min-h-12" onClick={() => void submitRequest()} disabled={!canSubmit} icon={loading ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}>
-                {loading ? "Preparing evidence..." : "Create Shelfmark PR"}
+                {loading ? "Preparing evidence..." : "Create review change"}
               </Button>
               <p className="font-body text-sm text-muted-foreground">
                 Corvin will not merge, deploy, read secrets, or edit environment files.
@@ -988,19 +991,19 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
             <CardHeader>
               <div>
                 <CardTitle>Product workspace</CardTitle>
-                <CardDescription>The app Corvin will change for judges.</CardDescription>
+                <CardDescription>The selected product Corvin will improve for judges.</CardDescription>
               </div>
               <div className="grid size-11 place-items-center rounded-md bg-muted text-muted-foreground">
                 <BookmarkPlus size={19} />
               </div>
             </CardHeader>
             <div className="grid gap-3">
-              <InfoRow label="Product" value={workspace.name} />
+              <InfoRow label="Product" value={product.label} />
               <InfoRow label="Review gate" value="Pull request only" />
               <InfoRow label="Decision path" value="Request -> checks -> screenshot -> PR" />
-              <InfoRow label="Checks" value={`${workspace.testCommand} + ${workspace.buildCommand}`} />
-              <a className="mt-2 flex min-h-11 items-center justify-between rounded-md border border-border bg-background px-3 py-2 font-primary text-sm text-foreground hover:bg-muted" href={workspace.productionUrl} target="_blank" rel="noreferrer">
-                Open Shelfmark
+              <InfoRow label="Checks" value={`${product.testCommand} + ${product.buildCommand}`} />
+              <a className="mt-2 flex min-h-11 items-center justify-between rounded-md border border-border bg-background px-3 py-2 font-primary text-sm text-foreground hover:bg-muted" href={productUrl} target="_blank" rel="noreferrer">
+                Open {product.label}
                 <ArrowUpRight size={15} />
               </a>
             </div>
@@ -1028,7 +1031,7 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
           <CardHeader>
             <div>
               <CardTitle>Latest outcome</CardTitle>
-              <CardDescription>What the judge receives after Corvin finishes the Shelfmark change.</CardDescription>
+              <CardDescription>What the judge receives after Corvin finishes the {product.label} change.</CardDescription>
             </div>
             <Badge tone={statusTone}>{latestRequest?.status ?? "Waiting"}</Badge>
           </CardHeader>
