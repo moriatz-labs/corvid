@@ -34,6 +34,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
+import { initializeProductAnalytics, trackProductEvent } from "./lib/analytics";
 import { cn } from "./lib/utils";
 import DemoApp from "./DemoApp";
 
@@ -144,6 +145,7 @@ const fallbackWorkspace: ShelfmarkWorkspace = {
 };
 
 const starterRequest = "Make Shelfmark's onboarding clearer for product managers saving research and customer evidence.";
+const trackedLoginIds = new Set<string>();
 
 const fallbackRepositories: OnboardingRepository[] = [
   {
@@ -220,6 +222,25 @@ function CorvinProductConsole() {
 function SignedInConsole() {
   const { user } = useUser();
   const requester = user?.primaryEmailAddress?.emailAddress ?? user?.id ?? "judge@local";
+
+  useEffect(() => {
+    initializeProductAnalytics(
+      user
+        ? {
+            id: user.id,
+            email: user.primaryEmailAddress?.emailAddress,
+            name: user.fullName ?? undefined,
+          }
+        : null,
+    );
+    if (user && !trackedLoginIds.has(user.id)) {
+      trackedLoginIds.add(user.id);
+      trackProductEvent("corvin_login_completed", {
+        email: user.primaryEmailAddress?.emailAddress,
+      });
+    }
+  }, [user]);
+
   return <OnboardingShell requester={requester} authMode="Signed in with Clerk." />;
 }
 
@@ -299,7 +320,14 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
   const completedSteps: OnboardingStep[] = scan ? ["connect", "scan", "install"] : activeStep === "scan" ? ["connect"] : [];
 
   if (!introComplete) {
-    return <OnboardingIntro onStart={() => setIntroComplete(true)} />;
+    return (
+      <OnboardingIntro
+        onStart={() => {
+          trackProductEvent("corvin_onboarding_started", { requester });
+          setIntroComplete(true);
+        }}
+      />
+    );
   }
 
   async function runScan() {
@@ -313,6 +341,13 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
         body: JSON.stringify({ repositoryId: selectedRepository.id }),
       });
       setScan(payload);
+      trackProductEvent("corvin_repository_scanned", {
+        repository: payload.repository.repo,
+        framework: payload.detected.framework,
+        envKeyCount: payload.detected.envKeys.length,
+        pageCount: payload.detected.pages.length,
+        novusInstalled: payload.repository.novusInstalled,
+      });
       setActiveStep("install");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Corvin could not scan the selected repository.");
@@ -390,7 +425,14 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
                           ? "border-terminal-text bg-[#202022]"
                           : "border-terminal-border bg-[#151517] hover:border-terminal-muted hover:bg-[#1d1d20]",
                       )}
-                      onClick={() => setSelectedRepositoryId(repository.id)}
+                      onClick={() => {
+                        setSelectedRepositoryId(repository.id);
+                        trackProductEvent("corvin_repository_selected", {
+                          repository: repository.repo,
+                          canRunJudgeRequests: repository.canRunJudgeRequests,
+                          novusInstalled: repository.novusInstalled,
+                        });
+                      }}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
@@ -443,7 +485,18 @@ function OnboardingShell({ requester, authMode }: { requester: string; authMode:
             ) : null}
 
             {scan ? (
-              <InstallPanel scan={scan} onContinue={() => setOnboardingComplete(true)} />
+              <InstallPanel
+                scan={scan}
+                onContinue={() => {
+                  trackProductEvent("corvin_exec_md_accepted", {
+                    repository: scan.repository.repo,
+                    validationReady: scan.validation?.ready ?? true,
+                    errorCount: scan.validation?.errors.length ?? 0,
+                    warningCount: scan.validation?.warnings.length ?? 0,
+                  });
+                  setOnboardingComplete(true);
+                }}
+              />
             ) : null}
           </div>
         </section>
@@ -818,6 +871,12 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
         setWorkspace(payload.workspace);
         setGithubReady(payload.githubReady);
         setRecentRequests(payload.requests);
+        trackProductEvent("corvin_shelfmark_workspace_loaded", {
+          repository: payload.workspace.repo,
+          githubReady: payload.githubReady,
+          novusInstalled: payload.workspace.novusInstalled,
+          recentRequestCount: payload.requests.length,
+        });
       } catch {
         if (!cancelled) {
           setWorkspace(fallbackWorkspace);
@@ -850,6 +909,14 @@ function JudgeConsole({ requester, authMode }: { requester: string; authMode: st
       const payload = (await response.json()) as ShelfmarkJudgeRequest;
       setResult(payload);
       setRecentRequests((current) => [payload, ...current.filter((request) => request.id !== payload.id)]);
+      trackProductEvent("corvin_shelfmark_request_submitted", {
+        requestLength: requestBody.trim().length,
+        status: payload.status,
+        hasCloudRun: Boolean(payload.cloudRunUrl),
+        hasPullRequest: Boolean(payload.pullRequestUrl),
+        changedFileCount: payload.changedFiles.length,
+        verificationCount: payload.verification.length,
+      });
       if (!response.ok) {
         setError(payload.blockedReason ?? payload.summary ?? "Corvin could not complete the Shelfmark request.");
       }
