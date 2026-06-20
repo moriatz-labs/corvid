@@ -2,6 +2,11 @@ node_modules/
 dist/
 .env
 *.log
+*.tsbuildinfo
 .corvin-whatsapp-auth/
 .corvin/jobs/
 .corvin/github-auth.json
+.corvin/repository-publish/
+.corvin/shelfmark-requests/
+.corvin/*.png
+.vercel

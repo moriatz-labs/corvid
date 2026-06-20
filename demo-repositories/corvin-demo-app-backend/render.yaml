@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: corvin-demo-app-backend
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 3000

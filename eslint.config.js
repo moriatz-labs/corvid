@@ -6,7 +6,13 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ["dist", "node_modules"],
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      ".corvin/**",
+      "demo-repositories/**/dist/**",
+      "demo-repositories/**/node_modules/**",
+    ],
   },
   {
     languageOptions: {

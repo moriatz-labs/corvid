@@ -1,1483 +1,1103 @@
 import {
+  SignedIn,
+  SignedOut,
+  SignInButton,
+  UserButton,
+  useUser,
+} from "@clerk/clerk-react";
+import {
+  ArrowRight,
+  ArrowUpRight,
+  BookmarkPlus,
+  Bot,
+  Camera,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Code2,
+  Database,
   FileText,
+  GitBranch,
+  Github,
+  GitPullRequest,
   Loader2,
-  QrCode,
-  X,
+  Lock,
+  MessageCircle,
+  Package,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Terminal,
+  WandSparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
-import { createInitialState } from "./shared/demo";
-import { parseExecMarkdown, renderExecMarkdown } from "./shared/mvp";
-import type {
-  AppEnvironment,
-  DeploymentDemoState,
-  ExecDocument,
-  ExecRepository,
-  ExecSetupState,
-  MvpState,
-  OpenAIChangePlan,
-  PMRequest,
-  WhatsAppConnect,
-} from "./shared/types";
+import { cn } from "./lib/utils";
+import DemoApp from "./DemoApp";
 
-const fallbackState = createInitialState();
+type ShelfmarkWorkspace = {
+  id: "shelfmark";
+  name: "Shelfmark";
+  repo: string;
+  defaultBranch: string;
+  branchPrefix: string;
+  localPath: string;
+  productionUrl: string;
+  installCommand: string;
+  testCommand: string;
+  buildCommand: string;
+  screenshotPath: string;
+  noticeFile: string;
+  novusInstalled: boolean;
+};
+
+type ShelfmarkJudgeRequest = {
+  id: string;
+  requester: string;
+  body: string;
+  status: "queued" | "blocked" | "running" | "pr-open" | "failed";
+  summary: string;
+  pullRequestUrl?: string;
+  cloudRunUrl?: string;
+  screenshots: string[];
+  changedFiles: string[];
+  verification: string[];
+  blockedReason?: string;
+};
+
+type ShelfmarkWorkspaceResponse = {
+  workspace: ShelfmarkWorkspace;
+  requests: ShelfmarkJudgeRequest[];
+  githubReady: boolean;
+};
+
+type OnboardingRepository = {
+  id: string;
+  account: string;
+  name: string;
+  label: string;
+  repo: string;
+  description: string;
+  defaultBranch: string;
+  framework: string;
+  packageManager: "npm" | "pnpm" | "yarn";
+  installCommand: string;
+  devCommand: string;
+  testCommand: string;
+  buildCommand: string;
+  healthUrl: string;
+  productionUrl?: string;
+  screenshotPaths: string[];
+  canRunJudgeRequests: boolean;
+  novusInstalled: boolean;
+};
+
+type OnboardingRepositoriesResponse = {
+  account: string;
+  repositories: OnboardingRepository[];
+  githubReady: boolean;
+};
+
+type OnboardingScanResult = {
+  repository: OnboardingRepository;
+  generatedBy: "Corvin AI onboarding";
+  generatedAt: string;
+  detected: {
+    framework: string;
+    packageManager: string;
+    scripts: string[];
+    envKeys: string[];
+    pages: string[];
+  };
+  steps: Array<{
+    id: "connect" | "scan" | "install";
+    label: string;
+    status: "complete" | "pending";
+    detail: string;
+  }>;
+  execMarkdown: string;
+  validation?: {
+    ready: boolean;
+    errors: Array<{ id: string; label: string; detail: string }>;
+    warnings: Array<{ id: string; label: string; detail: string }>;
+  };
+};
+
+type OnboardingStep = "connect" | "scan" | "install";
+
+const fallbackWorkspace: ShelfmarkWorkspace = {
+  id: "shelfmark",
+  name: "Shelfmark",
+  repo: "moriatz-labs/shelfmark",
+  defaultBranch: "main",
+  branchPrefix: "feature/shelfmark-judge",
+  localPath: "C:/Users/loqpm/Documents/Shelfmark",
+  productionUrl: "https://shelfmark.vercel.app",
+  installCommand: "npm install",
+  testCommand: "npm test",
+  buildCommand: "npm run build",
+  screenshotPath: "/",
+  noticeFile: "src/content/judge-request.ts",
+  novusInstalled: true,
+};
+
+const starterRequest = "Make Shelfmark's onboarding clearer for product managers saving research and customer evidence.";
+
+const fallbackRepositories: OnboardingRepository[] = [
+  {
+    id: "shelfmark",
+    account: "moriatz-labs",
+    name: "shelfmark",
+    label: "Shelfmark",
+    repo: "moriatz-labs/shelfmark",
+    description: "Public bookmarking product for PM judge requests.",
+    defaultBranch: "main",
+    framework: "React + TypeScript + Vite",
+    packageManager: "npm",
+    installCommand: "npm install",
+    devCommand: "npm run dev -- --host 0.0.0.0",
+    testCommand: "npm test",
+    buildCommand: "npm run build",
+    healthUrl: "http://localhost:5175",
+    productionUrl: "https://shelfmark.vercel.app",
+    screenshotPaths: ["/", "/collections", "/search"],
+    canRunJudgeRequests: true,
+    novusInstalled: true,
+  },
+  {
+    id: "corvin",
+    account: "moriatz-labs",
+    name: "corvid",
+    label: "Corvin",
+    repo: "moriatz-labs/corvid",
+    description: "PM workbench that converts product requests into reviewable PRs.",
+    defaultBranch: "main",
+    framework: "React + TypeScript + Vite + Express",
+    packageManager: "npm",
+    installCommand: "npm install",
+    devCommand: "npm run dev",
+    testCommand: "npm test",
+    buildCommand: "npm run build",
+    healthUrl: "http://localhost:5173",
+    productionUrl: "https://corvin.vercel.app",
+    screenshotPaths: ["/", "/demo"],
+    canRunJudgeRequests: false,
+    novusInstalled: false,
+  },
+];
 
 export default function App() {
-  const [state, setState] = useState<MvpState>(fallbackState);
-  const [loading, setLoading] = useState<string | null>(null);
-  const [requestBody, setRequestBody] = useState("Change the checkout headline to make the offer clearer.");
-  const [requestType, setRequestType] = useState("Copy change");
-  const [apiAvailable, setApiAvailable] = useState(false);
-  const [execMarkdown, setExecMarkdown] = useState(fallbackState.exec.markdown);
-  const [showExecSetup, setShowExecSetup] = useState(false);
-  const [reviewDecision, setReviewDecision] = useState<"idle" | "needs-revision">("idle");
-  const [whatsAppConnect, setWhatsAppConnect] = useState<WhatsAppConnect | null>(null);
-  const [whatsAppQrOpen, setWhatsAppQrOpen] = useState(false);
-  const [githubPolling, setGithubPolling] = useState(false);
-  const [activeSurface, setActiveSurface] = useState<"settings" | "job">("settings");
-
-  useEffect(() => {
-    void refreshState();
-  }, []);
-
-  async function refreshState() {
-    try {
-      const next = await api<MvpState>("/api/state");
-      setApiAvailable(true);
-      setState(next);
-      setExecMarkdown(next.exec.markdown);
-    } catch {
-      setApiAvailable(false);
-      setState(fallbackState);
-      setExecMarkdown(fallbackState.exec.markdown);
-    }
+  if (window.location.pathname.replace(/\/+$/, "") === "/demo") {
+    return <DemoApp />;
   }
 
-  async function runAction<T>(label: string, action: () => Promise<T>, onSuccess?: (result: T) => void) {
-    setLoading(label);
-    try {
-      const result = await action();
-      onSuccess?.(result);
-      await refreshState();
-    } finally {
-      setLoading(null);
-    }
-  }
+  return <CorvinProductConsole />;
+}
 
-  async function connectWhatsApp() {
-    await runAction(
-      "whatsapp",
-      () => api<WhatsAppConnect>("/api/integrations/whatsapp/connect"),
-      (connect) => {
-        setWhatsAppConnect(connect);
-        setWhatsAppQrOpen(true);
-      },
-    );
-  }
-
-  useEffect(() => {
-    if (!whatsAppConnect || whatsAppConnect.connected || !["connecting", "qr"].includes(whatsAppConnect.status)) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      void refreshWhatsAppStatus();
-    }, 2000);
-
-    return () => window.clearInterval(timer);
-  }, [whatsAppConnect]);
-
-  async function refreshWhatsAppStatus() {
-    const next = await api<WhatsAppConnect>("/api/integrations/whatsapp/status");
-    setWhatsAppConnect(next);
-    if (next.connected) {
-      await refreshState();
-    }
-  }
-
-  async function refreshWhatsAppQr() {
-    await runAction(
-      "whatsapp-refresh",
-      () => api<WhatsAppConnect>("/api/integrations/whatsapp/refresh", { method: "POST" }),
-      (connect) => {
-        setWhatsAppConnect(connect);
-        setWhatsAppQrOpen(true);
-      },
-    );
-  }
-
-  async function connectGitHub() {
-    await runAction("github", async () => {
-      const response = await api<{ configured: boolean; url?: string; message?: string }>(
-        "/api/integrations/github/authorize",
-      );
-      if (response.configured && response.url) {
-        window.open(response.url, "_blank", "noopener,noreferrer");
-        setGithubPolling(true);
-        return response;
-      }
-      window.alert(response.message ?? "GitHub App OAuth is not configured.");
-      return response;
-    });
-  }
-
-  useEffect(() => {
-    if (!githubPolling) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      void refreshGitHubStatus();
-    }, 2000);
-
-    return () => window.clearInterval(timer);
-  }, [githubPolling]);
-
-  async function refreshGitHubStatus() {
-    const status = await api<{ connected: boolean; error?: string }>("/api/integrations/github/status");
-    if (status.connected || status.error) {
-      setGithubPolling(false);
-      await refreshState();
-    }
-  }
-
-  async function runWorkspace() {
-    setLoading("run");
-    try {
-      const response = await fetch("/api/workspace/run", { method: "POST" });
-      const result = await response.json();
-      if (response.ok) {
-        setState(result as MvpState);
-      } else if (result.exec) {
-        setState((current) => ({ ...current, exec: result.exec as ExecSetupState }));
-      }
-      await refreshState();
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function stopWorkspace(removeVolumes = false) {
-    if (removeVolumes) {
-      const confirmed = window.confirm("Stop workspace and remove local volumes? This is destructive.");
-      if (!confirmed) {
-        return;
-      }
-    }
-    await runAction("stop", () => api<MvpState>("/api/workspace/stop", { method: "POST" }), setState);
-  }
-
-  async function submitRequest() {
-    await runAction("request", () =>
-      api<PMRequest>("/api/requests", {
-        method: "POST",
-        body: JSON.stringify({
-          title: requestType,
-          body: requestBody,
-          requester: "pm@acme.local",
-        }),
-      }),
-    );
-  }
-
-  async function generateOpenAIPlan() {
-    await runAction(
-      "openai",
-      () =>
-        api<OpenAIChangePlan>("/api/openai/change-plan", {
-          method: "POST",
-          body: JSON.stringify({ requestBody }),
-        }),
-      (plan) => setState((current) => ({ ...current, openAI: { ...current.openAI, lastPlan: plan } })),
-    );
-  }
-
-  async function deployStaging() {
-    await runAction(
-      "staging",
-      () =>
-        api<DeploymentDemoState>("/api/deploy/staging", {
-          method: "POST",
-          body: JSON.stringify({
-            requestId: state.requests[0]?.id,
-            headline: state.openAI.lastPlan?.recommendedHeadline,
-          }),
-        }),
-      (deployment) => setState((current) => ({ ...current, deployment })),
-    );
-    setReviewDecision("idle");
-  }
-
-  async function applyJobChange() {
-    const job = state.jobs[0];
-    if (!job) return;
-    await runAction(
-      "apply-change",
-      () =>
-        api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/apply-change`, {
-          method: "POST",
-          body: JSON.stringify({ feedback: reviewDecision === "needs-revision" ? "Apply requested review changes." : "" }),
-        }),
-      (nextJob) =>
-        setState((current) => ({
-          ...current,
-          jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
-        })),
-    );
-  }
-
-  async function createJobPullRequest() {
-    const job = state.jobs[0];
-    if (!job) return;
-    await runAction(
-      "create-pr",
-      () => api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/pull-request`, { method: "POST" }),
-      (nextJob) =>
-        setState((current) => ({
-          ...current,
-          jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
-        })),
-    );
-  }
-
-  async function requestJobChanges() {
-    const job = state.jobs[0];
-    if (!job) {
-      setReviewDecision("needs-revision");
-      return;
-    }
-    await runAction(
-      "request-changes",
-      () =>
-        api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/request-changes`, {
-          method: "POST",
-          body: JSON.stringify({ feedback: "PM sent the review back for changes." }),
-        }),
-      (nextJob) => {
-        setReviewDecision("needs-revision");
-        setState((current) => ({
-          ...current,
-          jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
-        }));
-      },
-    );
-  }
-
-  async function validateExecMarkdown() {
-    await runAction(
-      "exec-validate",
-      async () => {
-        const response = await api<ExecSetupState>("/api/exec/validate", {
-          method: "POST",
-          body: JSON.stringify({ markdown: execMarkdown }),
-        });
-        return response;
-      },
-      (exec) => setState((current) => ({ ...current, exec })),
-    );
-  }
-
-  async function saveExecMarkdown() {
-    setLoading("exec-save");
-    try {
-      const response = await fetch("/api/exec", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ markdown: execMarkdown }),
-      });
-      const exec = (await response.json()) as ExecSetupState;
-      setState((current) => ({ ...current, exec }));
-      if (response.ok) {
-        await refreshState();
-      }
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  const execReady = state.exec.exists && state.exec.validation.ready;
-  const setupOpen = !execReady || showExecSetup;
-  const currentAction = getCurrentAction(state, reviewDecision);
+function CorvinProductConsole() {
+  const clerkConfigured = Boolean(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {setupOpen ? (
-        <ExecSetupModal
-          state={state}
-          markdown={execMarkdown}
-          loading={loading}
-          onMarkdownChange={setExecMarkdown}
-          onValidate={() => void validateExecMarkdown()}
-          onSave={() => void saveExecMarkdown()}
-          onClose={execReady ? () => setShowExecSetup(false) : undefined}
-        />
-      ) : null}
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto flex max-w-[1180px] flex-col gap-4 px-5 py-4 md:flex-row md:items-center md:justify-between lg:px-8">
-          <div className="flex items-center gap-3">
-            <img
-              src="/corvin-logo.png"
-              alt="Corvin"
-              className="size-10 rounded-lg border border-border object-cover shadow-sm"
-            />
-            <div>
-              <p className="font-primary text-base font-medium">Corvin</p>
-              <p className="font-body text-xs text-muted-foreground">{state.workspace.name}</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant={activeSurface === "settings" ? "primary" : "secondary"}
-              onClick={() => setActiveSurface("settings")}
-            >
-              Settings
-            </Button>
-            <Button
-              variant={activeSurface === "job" ? "primary" : "secondary"}
-              onClick={() => setActiveSurface("job")}
-            >
-              Current job
-            </Button>
-            <Button onClick={() => setActiveSurface("job")} disabled={!execReady}>
-              Start a job
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto grid max-w-[1180px] gap-6 px-5 py-6 lg:px-8">
-        <CurrentActionBanner action={currentAction} apiAvailable={apiAvailable} execReady={execReady} />
-
-        {activeSurface === "settings" ? (
-          <SettingsSurface
-            state={state}
-            loading={githubPolling ? "github" : loading}
-            whatsAppConnect={whatsAppConnect}
-            onConfigureExec={() => setShowExecSetup(true)}
-            onWhatsApp={() => void connectWhatsApp()}
-            onGitHub={() => void connectGitHub()}
-            onOpenJob={() => setActiveSurface("job")}
-          />
-        ) : (
-          <JobSurface
-            state={state}
-            requestBody={requestBody}
-            requestType={requestType}
-            loading={loading}
-            ready={state.validation.ready && execReady}
-            action={currentAction}
-            reviewDecision={reviewDecision}
-            onBodyChange={setRequestBody}
-            onTypeChange={setRequestType}
-            onSubmit={() => void submitRequest()}
-            onPrepareContext={() => void runWorkspace()}
-            onGeneratePlan={() => void generateOpenAIPlan()}
-            onApplyChange={() => void applyJobChange()}
-            onCreatePullRequest={() => void createJobPullRequest()}
-            onStage={() => void deployStaging()}
-            onDemote={() => void requestJobChanges()}
-            onStop={() => void stopWorkspace(false)}
-          />
-        )}
-      </main>
-      {whatsAppConnect && whatsAppQrOpen ? (
-        <WhatsAppQrModal
-          connect={whatsAppConnect}
-          loading={loading === "whatsapp" || loading === "whatsapp-refresh"}
-          onClose={() => setWhatsAppQrOpen(false)}
-          onRefresh={() => void refreshWhatsAppStatus()}
-          onNewQr={() => void refreshWhatsAppQr()}
-        />
-      ) : null}
+    <div className="min-h-screen bg-terminal text-terminal-text">
+      {clerkConfigured ? (
+        <>
+          <SignedOut>
+            <SignedOutGate />
+          </SignedOut>
+          <SignedIn>
+            <SignedInConsole />
+          </SignedIn>
+        </>
+      ) : (
+        <OnboardingShell requester="judge@local" authMode="Local review mode. Configure Clerk before public judging." />
+      )}
     </div>
   );
 }
 
-function ExecSetupModal({
-  state,
-  markdown,
-  loading,
-  onMarkdownChange,
-  onValidate,
-  onSave,
-  onClose,
-}: {
-  state: MvpState;
-  markdown: string;
-  loading: string | null;
-  onMarkdownChange: (value: string) => void;
-  onValidate: () => void;
-  onSave: () => void;
-  onClose?: () => void;
-}) {
+function SignedInConsole() {
+  const { user } = useUser();
+  const requester = user?.primaryEmailAddress?.emailAddress ?? user?.id ?? "judge@local";
+  return <OnboardingShell requester={requester} authMode="Signed in with Clerk." />;
+}
+
+function SignedOutGate() {
   return (
-    <div className="fixed inset-0 z-50 overflow-auto bg-foreground/40 p-4 backdrop-blur-sm">
-      <div className="mx-auto my-6 max-w-[1180px] rounded-md border border-border bg-card p-5 shadow-xl">
-        <div className="mb-5 flex flex-col gap-4 border-b border-border pb-4 md:flex-row md:items-start md:justify-between">
-          <div>
-            <div className="mb-2 flex items-center gap-2">
-              <FileText size={18} />
-              <p className="font-primary text-sm text-muted-foreground">First-time workspace setup</p>
+    <div className="min-h-screen bg-terminal text-terminal-text">
+      <OnboardingTopBar activeStep="connect" completed={[]} />
+      <main className="mx-auto grid min-h-[calc(100vh-65px)] max-w-5xl place-items-center px-4 py-16 md:px-8">
+        <div className="w-full max-w-2xl rounded-md border border-terminal-border bg-[#1a1a1c] p-8 shadow-2xl">
+          <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <DarkPill tone="warning">Judge sign-in required</DarkPill>
+              <h1 className="mt-5 font-primary text-3xl font-medium leading-tight">Connect a real product repository.</h1>
+              <p className="mt-3 max-w-prose font-body text-sm leading-relaxed text-terminal-muted">
+                Corvin needs your identity before it can generate an auditable run packet, create branches, capture screenshots, and open PRs.
+              </p>
             </div>
-            <h2 className="font-primary text-2xl font-medium">Create exec.md before Corvin runs locally</h2>
-            <p className="mt-2 max-w-3xl font-body text-sm leading-relaxed text-muted-foreground">
-              Corvin needs an engineering-owned exec.md file with selected repositories, env vars, install commands,
-              dev commands, and health checks. The PM workflow stays blocked until this file validates.
+            <div className="grid size-12 shrink-0 place-items-center rounded-md border border-terminal-border bg-[#111113] text-terminal-muted">
+              <Lock size={21} />
+            </div>
+          </div>
+          <SignInButton mode="modal">
+            <Button className="mt-8 min-h-12 w-full bg-terminal-text text-terminal hover:bg-white" icon={<ShieldCheck size={16} />}>
+              Sign in with Clerk
+            </Button>
+          </SignInButton>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function OnboardingShell({ requester, authMode }: { requester: string; authMode: string }) {
+  const [repositories, setRepositories] = useState<OnboardingRepository[]>(fallbackRepositories);
+  const [selectedRepositoryId, setSelectedRepositoryId] = useState("shelfmark");
+  const [query, setQuery] = useState("");
+  const [githubReady, setGithubReady] = useState(false);
+  const [activeStep, setActiveStep] = useState<OnboardingStep>("connect");
+  const [scan, setScan] = useState<OnboardingScanResult | null>(null);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [introComplete, setIntroComplete] = useState(false);
+  const [onboardingComplete, setOnboardingComplete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadRepositories() {
+      try {
+        const payload = await api<OnboardingRepositoriesResponse>("/api/onboarding/repositories");
+        if (cancelled) return;
+        setRepositories(payload.repositories.length > 0 ? payload.repositories : fallbackRepositories);
+        setGithubReady(payload.githubReady);
+        if (payload.repositories.some((repository) => repository.id === "shelfmark")) {
+          setSelectedRepositoryId("shelfmark");
+        }
+      } catch {
+        if (!cancelled) {
+          setRepositories(fallbackRepositories);
+        }
+      }
+    }
+
+    void loadRepositories();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedRepository = repositories.find((repository) => repository.id === selectedRepositoryId) ?? repositories[0] ?? fallbackRepositories[0];
+  const filteredRepositories = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return repositories;
+    return repositories.filter((repository) =>
+      [repository.label, repository.repo, repository.description, repository.framework].some((value) => value.toLowerCase().includes(needle)),
+    );
+  }, [query, repositories]);
+  const completedSteps: OnboardingStep[] = scan ? ["connect", "scan", "install"] : activeStep === "scan" ? ["connect"] : [];
+
+  if (!introComplete) {
+    return <OnboardingIntro onStart={() => setIntroComplete(true)} />;
+  }
+
+  async function runScan() {
+    setScanLoading(true);
+    setError(null);
+    setActiveStep("scan");
+
+    try {
+      const payload = await api<OnboardingScanResult>("/api/onboarding/scan", {
+        method: "POST",
+        body: JSON.stringify({ repositoryId: selectedRepository.id }),
+      });
+      setScan(payload);
+      setActiveStep("install");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Corvin could not scan the selected repository.");
+      setActiveStep("connect");
+    } finally {
+      setScanLoading(false);
+    }
+  }
+
+  if (onboardingComplete) {
+    return (
+      <div className="min-h-screen bg-background text-foreground">
+        <WorkbenchHeader activeStep="install" />
+        <JudgeConsole requester={requester} authMode={authMode} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-terminal text-terminal-text">
+      <OnboardingTopBar activeStep={activeStep} completed={completedSteps} />
+      <main className="grid min-h-[calc(100vh-65px)] border-t border-terminal-border lg:grid-cols-[minmax(0,1fr)_374px]">
+        <section className="mx-auto grid w-full max-w-5xl content-start gap-8 px-4 py-12 md:px-8 md:py-20">
+          <div className="mx-auto w-full max-w-3xl">
+            <div className="mb-9 text-center">
+              <h1 className="mx-auto max-w-2xl font-primary text-4xl font-medium leading-tight text-white md:text-5xl">
+                Product changes, powered by your repository.
+              </h1>
+              <p className="mt-4 font-body text-sm leading-relaxed text-terminal-muted md:text-base">
+                Connect the app a PM will work on. Corvin scans the codebase and generates `exec.md` during onboarding.
+              </p>
+            </div>
+
+            <SetupHeroCard />
+
+            <div className="mt-8 overflow-hidden rounded-md border border-terminal-border bg-[#19191b] shadow-2xl">
+              <div className="border-b border-terminal-border p-5 md:p-6">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex gap-4">
+                    <div className="grid size-11 shrink-0 place-items-center rounded-md border border-terminal-border bg-[#242426] text-terminal-muted">
+                      <Github size={20} />
+                    </div>
+                    <div>
+                      <h2 className="font-primary text-lg font-medium text-white">Import Git repositories</h2>
+                      <p className="mt-1 font-body text-sm text-terminal-muted">{repositories.length} available Moriatz Labs repositories</p>
+                    </div>
+                  </div>
+                  <DarkPill tone={githubReady ? "success" : "neutral"}>{githubReady ? "GitHub token ready" : "GitHub public sync"}</DarkPill>
+                </div>
+
+                <button className="mt-5 flex min-h-10 w-full items-center justify-between rounded-md border border-terminal-border bg-[#202022] px-3 text-left font-default text-sm text-terminal-muted">
+                  <span>{selectedRepository.account}</span>
+                  <ChevronDown size={16} />
+                </button>
+              </div>
+
+              <div className="border-b border-terminal-border bg-[#0d0d0e] p-5 md:p-6">
+                <label className="relative block">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-terminal-muted" size={17} />
+                  <input
+                    className="min-h-11 w-full rounded-md border border-terminal-border bg-[#111113] pl-10 pr-3 font-default text-sm text-terminal-text outline-none transition-colors placeholder:text-terminal-muted focus:border-terminal-muted"
+                    placeholder="Search repositories..."
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                  />
+                </label>
+
+                <div className="mt-4 grid max-h-80 gap-3 overflow-y-auto pr-1">
+                  {filteredRepositories.map((repository) => (
+                    <button
+                      key={repository.id}
+                      className={cn(
+                        "w-full rounded-md border p-4 text-left transition-colors",
+                        selectedRepository.id === repository.id
+                          ? "border-terminal-text bg-[#202022]"
+                          : "border-terminal-border bg-[#151517] hover:border-terminal-muted hover:bg-[#1d1d20]",
+                      )}
+                      onClick={() => setSelectedRepositoryId(repository.id)}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-primary text-sm font-medium text-white">{repository.label}</p>
+                            {repository.canRunJudgeRequests ? <DarkPill tone="success">PM-ready</DarkPill> : <DarkPill tone="neutral">Setup only</DarkPill>}
+                          </div>
+                          <p className="mt-1 truncate font-mono text-xs text-terminal-muted">{repository.repo}</p>
+                          <p className="mt-3 font-body text-xs leading-relaxed text-terminal-muted">{repository.description}</p>
+                        </div>
+                        <div
+                          className={cn(
+                            "grid size-5 shrink-0 place-items-center rounded-full border",
+                            selectedRepository.id === repository.id ? "border-terminal-text bg-terminal-text text-terminal" : "border-terminal-border text-transparent",
+                          )}
+                        >
+                          <Check size={13} />
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                  {filteredRepositories.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-terminal-border p-5 text-center font-body text-sm text-terminal-muted">
+                      No repositories match that search.
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-4 bg-[#282829] p-5 sm:flex-row sm:items-center sm:justify-between md:p-6">
+                <p className="font-body text-sm text-terminal-muted">
+                  Selected: <span className="font-mono text-terminal-text">{selectedRepository.repo}</span>
+                </p>
+                <Button
+                  className="min-h-11 bg-terminal-text text-terminal hover:bg-white"
+                  onClick={() => void runScan()}
+                  disabled={scanLoading}
+                  icon={scanLoading ? <Loader2 className="animate-spin" size={16} /> : <WandSparkles size={16} />}
+                >
+                  {scanLoading ? "Scanning codebase..." : "Scan & generate exec.md"}
+                </Button>
+              </div>
+            </div>
+
+            {error ? (
+              <div className="mt-4 rounded-md border border-[#6b3c35] bg-[#241714] p-4">
+                <p className="font-primary text-sm font-medium text-white">Onboarding needs attention</p>
+                <p className="mt-1 font-body text-sm leading-relaxed text-terminal-muted">{error}</p>
+              </div>
+            ) : null}
+
+            {scan ? (
+              <InstallPanel scan={scan} onContinue={() => setOnboardingComplete(true)} />
+            ) : null}
+          </div>
+        </section>
+
+        <SetupAssistantPanel
+          requester={requester}
+          authMode={authMode}
+          activeStep={activeStep}
+          selectedRepository={selectedRepository}
+          scan={scan}
+        />
+      </main>
+    </div>
+  );
+}
+
+function OnboardingIntro({ onStart }: { onStart: () => void }) {
+  return (
+    <div className="min-h-screen bg-[#070707] text-terminal-text">
+      <IntroTopBar />
+      <main className="grid min-h-[calc(100vh-65px)] place-items-center px-4 py-12">
+        <section className="w-full max-w-2xl">
+          <div className="text-center">
+            <h1 className="font-primary text-4xl font-medium leading-tight text-white md:text-5xl">
+              Product changes,
+              <br />
+              powered by your code.
+            </h1>
+            <p className="mt-4 font-default text-sm text-terminal-muted md:text-base">
+              Ready in under 5 minutes · One PR to review · Built for PMs
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <Badge tone={state.exec.exists && state.exec.validation.ready ? "success" : "warning"}>
-              {state.exec.exists && state.exec.validation.ready ? "Ready" : "Setup required"}
-            </Badge>
-            {onClose ? (
-              <Button variant="secondary" onClick={onClose}>
-                Close
+
+          <div className="mt-8 grid gap-4">
+            <IntroStepCard
+              icon={<Code2 size={23} />}
+              index="1."
+              title="Connect & scan your codebase"
+              body="Pick the Moriatz Labs repository the product manager will work on. Corvin maps framework, commands, pages, and analytics needs automatically."
+            />
+            <IntroStepCard
+              icon={<Sparkles size={23} />}
+              index="2."
+              title="AI generates your exec.md"
+              body="The run packet is created from how the code actually works, so engineering does not need to author setup instructions by hand."
+            />
+            <IntroStepCard
+              icon={<GitPullRequest size={23} />}
+              index="3."
+              title="Go live via a reviewable PR"
+              body="A PM request becomes a branch, screenshot, summary, and pull request. Corvin never auto-merges judge changes."
+            />
+          </div>
+
+          <div className="mt-8 text-center">
+            <button className="inline-flex items-center gap-2 rounded-md px-3 py-2 font-default text-sm text-terminal-muted hover:text-white" type="button">
+              <MessageCircle size={15} />
+              Invite teammates
+            </button>
+          </div>
+
+          <Button className="mt-4 min-h-12 w-full bg-terminal-text text-terminal hover:bg-white" onClick={onStart} icon={<ArrowRight size={16} />}>
+            Get Started
+          </Button>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function IntroTopBar() {
+  return (
+    <header className="border-b border-terminal-border bg-[#070707]">
+      <div className="flex min-h-16 items-center justify-between px-4 md:px-6">
+        <div className="flex items-center gap-3">
+          <img src="/corvin-logo.png" alt="Corvin" className="size-9 rounded-md object-cover" />
+          <span className="font-primary text-2xl font-medium text-white">corvin</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <a
+            className="hidden min-h-9 items-center gap-2 rounded-md border border-terminal-border px-3 font-primary text-xs text-terminal-text transition-colors hover:bg-[#171719] sm:flex"
+            href="/demo"
+          >
+            Demo archive
+            <ArrowUpRight size={14} />
+          </a>
+          {import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ? <UserButton afterSignOutUrl="/" /> : null}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function IntroStepCard({ icon, index, title, body }: { icon: React.ReactNode; index: string; title: string; body: string }) {
+  return (
+    <div className="rounded-md border border-terminal-border bg-[#19191b] p-6">
+      <div className="flex gap-5">
+        <div className="grid size-12 shrink-0 place-items-center rounded-md border border-terminal-border bg-[#111113] text-terminal-muted">
+          {icon}
+        </div>
+        <div>
+          <h2 className="font-primary text-base font-medium text-white">
+            <span className="mr-2 text-terminal-muted">{index}</span>
+            {title}
+          </h2>
+          <p className="mt-2 font-body text-sm leading-relaxed text-terminal-muted">{body}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OnboardingTopBar({ activeStep, completed }: { activeStep: OnboardingStep; completed: OnboardingStep[] }) {
+  return (
+    <header className="sticky top-0 z-30 border-b border-terminal-border bg-[#070707]/95 backdrop-blur">
+      <div className="grid min-h-16 grid-cols-[1fr_auto] items-center gap-4 px-4 md:grid-cols-[1fr_minmax(360px,520px)_1fr] md:px-6">
+        <div className="flex items-center gap-3">
+          <img src="/corvin-logo.png" alt="Corvin" className="size-9 rounded-md object-cover" />
+          <span className="font-primary text-2xl font-medium tracking-normal text-white">corvin</span>
+        </div>
+        <div className="hidden items-center gap-3 md:flex">
+          {(["connect", "scan", "install"] as OnboardingStep[]).map((step, index) => (
+            <TopStep key={step} step={step} active={activeStep === step} complete={completed.includes(step)} showLine={index < 2} />
+          ))}
+        </div>
+        <div className="flex items-center justify-end gap-3">
+          <a
+            className="hidden min-h-9 items-center gap-2 rounded-md border border-terminal-border px-3 font-primary text-xs text-terminal-text transition-colors hover:bg-[#171719] sm:flex"
+            href="/demo"
+          >
+            Demo archive
+            <ArrowUpRight size={14} />
+          </a>
+          {import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ? <UserButton afterSignOutUrl="/" /> : null}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function WorkbenchHeader({ activeStep }: { activeStep: OnboardingStep }) {
+  return (
+    <header className="border-b border-border bg-card">
+      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 md:px-8">
+        <a className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-card focus:p-3" href="#request">
+          Skip to request
+        </a>
+        <div className="flex items-center gap-3">
+          <img src="/corvin-logo.png" alt="Corvin" className="size-10 rounded-md border border-border object-cover" />
+          <div>
+            <p className="font-primary text-lg font-medium">Corvin</p>
+            <p className="font-body text-xs text-muted-foreground">Shelfmark PM workbench</p>
+          </div>
+        </div>
+        <div className="hidden items-center gap-2 lg:flex">
+          {(["connect", "scan", "install"] as OnboardingStep[]).map((step) => (
+            <Badge key={step} tone={activeStep === step ? "success" : "neutral"}>{step}</Badge>
+          ))}
+        </div>
+        {import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ? <UserButton afterSignOutUrl="/" /> : null}
+      </div>
+    </header>
+  );
+}
+
+function TopStep({ step, active, complete, showLine }: { step: OnboardingStep; active: boolean; complete: boolean; showLine: boolean }) {
+  const label = step[0].toUpperCase() + step.slice(1);
+  return (
+    <>
+      <div className="grid min-w-24 gap-1">
+        <span className={cn("font-primary text-xs", active || complete ? "text-white" : "text-terminal-muted")}>{label}</span>
+        <span className={cn("h-1 rounded-full", active || complete ? "bg-terminal-text" : "bg-terminal-border")} />
+      </div>
+      {showLine ? <span className="h-px w-8 bg-terminal-border" /> : null}
+    </>
+  );
+}
+
+function SetupHeroCard() {
+  return (
+    <div className="rounded-md border border-terminal-border bg-[#19191b] p-6">
+      <div className="flex gap-4">
+        <div className="grid size-12 shrink-0 place-items-center rounded-md border border-terminal-border bg-[#111113] text-terminal-muted">
+          <Code2 size={23} />
+        </div>
+        <div>
+          <h2 className="font-primary text-lg font-medium text-white">Connect & scan your codebase</h2>
+          <p className="mt-2 font-body text-sm leading-relaxed text-terminal-muted">
+            Choose the repository the product manager will work on. Corvin reads the framework, commands, pages, and analytics needs, then writes the run packet automatically.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InstallPanel({ scan, onContinue }: { scan: OnboardingScanResult; onContinue: () => void }) {
+  return (
+    <div className="mt-8 grid gap-5 rounded-md border border-terminal-border bg-[#19191b] p-5 md:p-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <DarkPill tone={scan.validation?.ready === false ? "warning" : "success"}>{scan.validation?.ready === false ? "Needs review" : "exec.md ready"}</DarkPill>
+          <h2 className="mt-4 font-primary text-2xl font-medium text-white">Corvin generated the run packet.</h2>
+          <p className="mt-2 max-w-prose font-body text-sm leading-relaxed text-terminal-muted">
+            The PM does not need an engineering-authored setup file. Corvin saved `exec.md` from the repository scan and can now use it as workspace context.
+          </p>
+        </div>
+        <div className="grid size-12 shrink-0 place-items-center rounded-md border border-terminal-border bg-[#111113] text-terminal-muted">
+          <FileText size={21} />
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <DarkFact icon={<Package size={16} />} label="Framework" value={scan.detected.framework} />
+        <DarkFact icon={<Terminal size={16} />} label="Commands" value={`${scan.repository.testCommand} + ${scan.repository.buildCommand}`} />
+        <DarkFact icon={<Database size={16} />} label="Analytics" value={scan.repository.novusInstalled ? "Novus/Pendo active" : "Install pending"} />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div className="grid content-start gap-3">
+          {scan.steps.map((step) => (
+            <div key={step.id} className="flex gap-3 rounded-md border border-terminal-border bg-[#111113] p-3">
+              <div className="grid size-7 shrink-0 place-items-center rounded-full bg-terminal-text text-terminal">
+                <Check size={14} />
+              </div>
+              <div>
+                <p className="font-primary text-sm font-medium text-white">{step.label}</p>
+                <p className="mt-1 font-body text-xs leading-relaxed text-terminal-muted">{step.detail}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        <pre className="max-h-72 overflow-auto rounded-md border border-terminal-border bg-[#0d0d0e] p-4 font-mono text-xs leading-relaxed text-terminal-muted">
+          {scan.execMarkdown}
+        </pre>
+      </div>
+
+      <div className="flex flex-col gap-3 border-t border-terminal-border pt-5 sm:flex-row sm:items-center sm:justify-between">
+        <p className="font-body text-sm text-terminal-muted">
+          Next: judges can request changes against <span className="font-mono text-terminal-text">{scan.repository.repo}</span>.
+        </p>
+        <Button className="min-h-11 bg-terminal-text text-terminal hover:bg-white" onClick={onContinue} icon={<ArrowRight size={16} />}>
+          Open PM workbench
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function SetupAssistantPanel({
+  requester,
+  authMode,
+  activeStep,
+  selectedRepository,
+  scan,
+}: {
+  requester: string;
+  authMode: string;
+  activeStep: OnboardingStep;
+  selectedRepository: OnboardingRepository;
+  scan: OnboardingScanResult | null;
+}) {
+  return (
+    <aside className="border-t border-terminal-border bg-[#090909] lg:border-l lg:border-t-0">
+      <div className="sticky top-16 grid min-h-[calc(100vh-65px)] content-between">
+        <div className="p-5">
+          <div className="flex items-center gap-3 border-b border-terminal-border pb-5">
+            <img src="/corvin-logo.png" alt="" className="size-8 rounded-md object-cover" />
+            <div>
+              <p className="font-primary text-sm font-medium text-white">Corvin Setup Assistant</p>
+              <p className="font-mono text-[11px] text-terminal-muted">{selectedRepository.repo}</p>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-md border border-terminal-border bg-[#111113] p-4">
+            <div className="mb-3 grid size-9 place-items-center rounded-md bg-[#202022] text-terminal-muted">
+              <Bot size={18} />
+            </div>
+            <p className="font-mono text-sm leading-relaxed text-terminal-text">
+              Welcome. I will connect the repository, scan framework and scripts, generate `exec.md`, and keep product managers away from setup chores.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <DarkQuestion text="Why connect GitHub?" />
+              <DarkQuestion text="Who writes exec.md?" />
+              <DarkQuestion text="What happens next?" />
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3">
+            <AssistantRow active={activeStep === "connect"} complete={Boolean(scan)} icon={<Github size={16} />} title="Connect" body="Select the Moriatz Labs repo PMs will change." />
+            <AssistantRow active={activeStep === "scan"} complete={Boolean(scan)} icon={<Search size={16} />} title="Scan" body="Infer framework, commands, health URL, pages, and env keys." />
+            <AssistantRow active={activeStep === "install"} complete={Boolean(scan)} icon={<FileText size={16} />} title="Install" body="Write exec.md and unlock the PM change workbench." />
+          </div>
+
+          <div className="mt-5 rounded-md border border-terminal-border bg-[#111113] p-4">
+            <p className="font-primary text-xs font-medium uppercase text-terminal-muted">Signed in as</p>
+            <p className="mt-2 break-all font-mono text-xs text-terminal-text">{requester}</p>
+            <p className="mt-2 font-body text-xs leading-relaxed text-terminal-muted">{authMode}</p>
+          </div>
+        </div>
+
+        <div className="border-t border-terminal-border p-5">
+          <div className="flex min-h-10 items-center gap-2 rounded-md border border-terminal-border bg-[#202022] px-3 text-terminal-muted">
+            <MessageCircle size={15} />
+            <span className="font-mono text-xs">Ask about this product...</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function DarkFact({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-terminal-border bg-[#111113] p-4">
+      <div className="mb-3 text-terminal-muted">{icon}</div>
+      <p className="font-primary text-xs text-terminal-muted">{label}</p>
+      <p className="mt-1 font-mono text-xs leading-relaxed text-terminal-text">{value}</p>
+    </div>
+  );
+}
+
+function AssistantRow({ active, complete, icon, title, body }: { active: boolean; complete: boolean; icon: React.ReactNode; title: string; body: string }) {
+  return (
+    <div className={cn("flex gap-3 rounded-md border p-3", active || complete ? "border-terminal-muted bg-[#18181a]" : "border-terminal-border bg-[#0d0d0e]")}>
+      <div className={cn("grid size-8 shrink-0 place-items-center rounded-md", complete ? "bg-terminal-text text-terminal" : "bg-[#202022] text-terminal-muted")}>
+        {complete ? <Check size={15} /> : icon}
+      </div>
+      <div>
+        <p className="font-primary text-sm font-medium text-white">{title}</p>
+        <p className="mt-1 font-body text-xs leading-relaxed text-terminal-muted">{body}</p>
+      </div>
+    </div>
+  );
+}
+
+function DarkPill({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "success" | "warning" }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border px-2 py-1 font-primary text-xs font-medium",
+        tone === "success" && "border-[#235c55] bg-[#10231f] text-[#9ee5d7]",
+        tone === "warning" && "border-[#6b5532] bg-[#241d11] text-[#e7ca8a]",
+        tone === "neutral" && "border-terminal-border bg-[#202022] text-terminal-muted",
+      )}
+    >
+      <span className="size-1.5 rounded-full bg-current" />
+      {children}
+    </span>
+  );
+}
+
+function DarkQuestion({ text }: { text: string }) {
+  return <span className="rounded-md border border-terminal-border bg-[#202022] px-2 py-1 font-mono text-[11px] text-terminal-text">{text}</span>;
+}
+
+function JudgeConsole({ requester, authMode }: { requester: string; authMode: string }) {
+  const [workspace, setWorkspace] = useState<ShelfmarkWorkspace>(fallbackWorkspace);
+  const [githubReady, setGithubReady] = useState(false);
+  const [recentRequests, setRecentRequests] = useState<ShelfmarkJudgeRequest[]>([]);
+  const [requestBody, setRequestBody] = useState(starterRequest);
+  const [result, setResult] = useState<ShelfmarkJudgeRequest | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadWorkspace() {
+      try {
+        const payload = await api<ShelfmarkWorkspaceResponse>("/api/shelfmark/workspace");
+        if (cancelled) return;
+        setWorkspace(payload.workspace);
+        setGithubReady(payload.githubReady);
+        setRecentRequests(payload.requests);
+      } catch {
+        if (!cancelled) {
+          setWorkspace(fallbackWorkspace);
+          setGithubReady(false);
+        }
+      }
+    }
+
+    void loadWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const latestRequest = result ?? recentRequests[0] ?? null;
+  const canSubmit = requestBody.trim().length >= 12 && !loading;
+  const statusTone = latestRequest?.status === "pr-open" ? "success" : latestRequest?.status === "failed" || latestRequest?.status === "blocked" ? "warning" : "neutral";
+
+  async function submitRequest() {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const response = await fetch("/api/shelfmark/requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requester, body: requestBody }),
+      });
+      const payload = (await response.json()) as ShelfmarkJudgeRequest;
+      setResult(payload);
+      setRecentRequests((current) => [payload, ...current.filter((request) => request.id !== payload.id)]);
+      if (!response.ok) {
+        setError(payload.blockedReason ?? payload.summary ?? "Corvin could not complete the Shelfmark request.");
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Corvin could not complete the Shelfmark request.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 md:px-8 md:py-8">
+      <section className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+        <div className="rounded-md border border-border bg-card p-6 md:p-8">
+          <div className="mb-8 flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
+            <div>
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <Badge tone={githubReady ? "success" : "warning"}>{githubReady ? "GitHub ready" : "GitHub token needed"}</Badge>
+                <Badge tone={workspace.novusInstalled ? "success" : "neutral"}>{workspace.novusInstalled ? "Novus installed" : "Novus pending"}</Badge>
+                <Badge tone="info">exec.md generated</Badge>
+                <Badge tone="info">PR-only review gate</Badge>
+              </div>
+              <h1 className="max-w-4xl font-primary text-4xl font-medium leading-tight md:text-6xl">
+                Tell Corvin what Shelfmark should do better.
+              </h1>
+              <p className="mt-4 max-w-prose font-body text-base leading-relaxed text-muted-foreground">
+                Corvin turns a product-manager request into a reviewable repository change: branch, checks, screenshot, summary, and pull request.
+              </p>
+            </div>
+            <div className="rounded-md border border-border bg-background p-4">
+              <p className="font-primary text-xs text-muted-foreground">Judge</p>
+              <p className="mt-1 break-all font-mono text-xs text-foreground">{requester}</p>
+              <p className="mt-2 font-body text-xs leading-relaxed text-muted-foreground">{authMode}</p>
+            </div>
+          </div>
+
+          <div id="request" className="grid gap-4">
+            <label className="grid gap-2">
+              <span className="font-primary text-sm font-medium">Product request</span>
+              <textarea
+                className="min-h-44 resize-y rounded-md border border-border bg-background p-4 font-body text-base leading-relaxed text-foreground outline-none transition-colors focus:border-primary"
+                value={requestBody}
+                onChange={(event) => setRequestBody(event.target.value)}
+              />
+            </label>
+            <div className="grid gap-3 rounded-md border border-border bg-background p-4 md:grid-cols-3">
+              <PlainStep icon={<FileText size={17} />} title="Write naturally" body="Ask for copy, flow, UI, empty-state, or clarity improvements." />
+              <PlainStep icon={<GitBranch size={17} />} title="Corvin edits Shelfmark" body="The request lands in the real Moriatz Labs Shelfmark repository on a branch." />
+              <PlainStep icon={<GitPullRequest size={17} />} title="Review evidence" body="You get a PR, screenshot, summary, and verification checks." />
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <Button className="min-h-12" onClick={() => void submitRequest()} disabled={!canSubmit} icon={loading ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}>
+                {loading ? "Preparing evidence..." : "Create Shelfmark PR"}
               </Button>
+              <p className="font-body text-sm text-muted-foreground">
+                Corvin will not merge, deploy, read secrets, or edit environment files.
+              </p>
+            </div>
+            {error ? (
+              <div className="rounded-md border border-border bg-muted p-4">
+                <p className="font-primary text-sm font-medium">Request needs attention</p>
+                <p className="mt-1 font-body text-sm leading-relaxed text-muted-foreground">{error}</p>
+              </div>
             ) : null}
           </div>
         </div>
-        <ExecSetupEditor
-          state={state}
-          markdown={markdown}
-          loading={loading}
-          onMarkdownChange={onMarkdownChange}
-          onValidate={onValidate}
-          onSave={onSave}
-        />
-      </div>
-    </div>
-  );
-}
 
-export function ExecSetupPanel({
-  state,
-  markdown,
-  loading,
-  onMarkdownChange,
-  onValidate,
-  onSave,
-}: {
-  state: MvpState;
-  markdown: string;
-  loading: string | null;
-  onMarkdownChange: (value: string) => void;
-  onValidate: () => void;
-  onSave: () => void;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>exec.md local setup</CardTitle>
-          <CardDescription>
-            Engineering selects linked repositories, envs, and run commands; Corvin packages the local workflow at runtime.
-          </CardDescription>
-        </div>
-        <Badge tone={state.exec.exists && state.exec.validation.ready ? "success" : "warning"}>
-          {state.exec.exists && state.exec.validation.ready ? "Valid" : "Required"}
-        </Badge>
-      </CardHeader>
-      <ExecSetupEditor
-        state={state}
-        markdown={markdown}
-        loading={loading}
-        onMarkdownChange={onMarkdownChange}
-        onValidate={onValidate}
-        onSave={onSave}
-      />
-    </Card>
-  );
-}
-
-function ExecSetupEditor({
-  state,
-  markdown,
-  loading,
-  onMarkdownChange,
-  onValidate,
-  onSave,
-}: {
-  state: MvpState;
-  markdown: string;
-  loading: string | null;
-  onMarkdownChange: (value: string) => void;
-  onValidate: () => void;
-  onSave: () => void;
-}) {
-  const parsed = useMemo(() => parseExecMarkdown(markdown), [markdown]);
-  const document = parsed.ok ? parsed.document : null;
-  const validation = state.exec.validation;
-  const repoOptions = state.workspace.repositories.map((repository) => ({
-    id: repository.id,
-    repo: repository.sourceRef.replace(/^synced-repo:\/\//, ""),
-    label: repository.label,
-    role: repository.purpose ?? repository.label,
-    health: state.workspace.services.find((service) => service.repositoryId === repository.id)?.healthUrl ?? "",
-  }));
-
-  function updateDocument(next: ExecDocument) {
-    onMarkdownChange(renderExecMarkdown(next));
-  }
-
-  function updateRepository(index: number, patch: Partial<ExecRepository>) {
-    if (!document) return;
-    updateDocument({
-      ...document,
-      repositories: document.repositories.map((repository, itemIndex) =>
-        itemIndex === index ? { ...repository, ...patch } : repository,
-      ),
-    });
-  }
-
-  function selectRepository(index: number, repo: string) {
-    const option = repoOptions.find((item) => item.repo === repo);
-    if (!option) return;
-    updateRepository(index, {
-      id: option.id,
-      repo: option.repo,
-      role: option.role,
-      health: option.health,
-    });
-  }
-
-  function addRepository() {
-    if (!document) return;
-    const used = new Set(document.repositories.map((repository) => repository.repo));
-    const option = repoOptions.find((item) => !used.has(item.repo)) ?? repoOptions[0];
-    if (!option) return;
-    updateDocument({
-      ...document,
-      repositories: [
-        ...document.repositories,
-        {
-          id: option.id,
-          repo: option.repo,
-          role: option.role,
-          install: "",
-          dev: "",
-          health: option.health,
-        },
-      ],
-    });
-  }
-
-  function updateGlobalEnv(index: number, patch: Partial<ExecDocument["environment"]["global"][number]>) {
-    if (!document) return;
-    updateDocument({
-      ...document,
-      environment: {
-        ...document.environment,
-        global: document.environment.global.map((variable, itemIndex) =>
-          itemIndex === index ? { ...variable, ...patch } : variable,
-        ),
-      },
-    });
-  }
-
-  function addGlobalEnv() {
-    if (!document) return;
-    updateDocument({
-      ...document,
-      environment: {
-        ...document.environment,
-        global: [
-          ...document.environment.global,
-          {
-            name: "NEW_ENV_VAR",
-            required: true,
-            description: "Describe where this value comes from.",
-          },
-        ],
-      },
-    });
-  }
-
-  return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-      <div className="grid gap-4">
-        <div className="rounded-md border border-border bg-background p-4">
-          <p className="font-primary text-sm font-medium">Survey setup</p>
-          <p className="mt-1 font-body text-xs leading-relaxed text-muted-foreground">
-            Pick linked GitHub repositories and document exactly how each one installs, starts, and proves health.
-          </p>
-
-          {document ? (
-            <div className="mt-4 grid gap-4">
-              <label className="grid gap-2">
-                <span className="font-primary text-xs font-medium text-muted-foreground">Purpose</span>
-                <input
-                  className="min-h-10 rounded-md border border-border bg-card px-3 font-body text-sm outline-none focus:border-primary"
-                  value={document.purpose}
-                  onChange={(event) => updateDocument({ ...document, purpose: event.target.value })}
-                />
-              </label>
-
-              <div className="grid gap-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-primary text-xs font-medium text-muted-foreground">Repositories</p>
-                  <Button variant="secondary" onClick={addRepository} disabled={repoOptions.length === 0}>
-                    Add repo
-                  </Button>
-                </div>
-                {document.repositories.map((repository, index) => (
-                  <div key={`${repository.id}-${index}`} className="grid gap-3 rounded-md border border-border bg-muted p-3">
-                    <label className="grid gap-2">
-                      <span className="font-primary text-xs text-muted-foreground">GitHub repository</span>
-                      <select
-                        className="min-h-10 rounded-md border border-border bg-card px-3 font-primary text-sm outline-none focus:border-primary"
-                        value={repository.repo}
-                        onChange={(event) => selectRepository(index, event.target.value)}
-                      >
-                        {repoOptions.map((option) => (
-                          <option key={option.repo} value={option.repo}>
-                            {option.repo}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <ExecInput label="Install" value={repository.install} onChange={(value) => updateRepository(index, { install: value })} />
-                      <ExecInput label="Dev" value={repository.dev} onChange={(value) => updateRepository(index, { dev: value })} />
-                    </div>
-                    <ExecInput label="Health URL" value={repository.health} onChange={(value) => updateRepository(index, { health: value })} />
-                  </div>
-                ))}
+        <aside className="grid content-start gap-6">
+          <Card>
+            <CardHeader>
+              <div>
+                <CardTitle>Product workspace</CardTitle>
+                <CardDescription>The app Corvin will change for judges.</CardDescription>
               </div>
-
-              <div className="grid gap-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-primary text-xs font-medium text-muted-foreground">Global env vars</p>
-                  <Button variant="secondary" onClick={addGlobalEnv}>
-                    Add env
-                  </Button>
-                </div>
-                {document.environment.global.map((variable, index) => (
-                  <div key={`${variable.name}-${index}`} className="grid gap-3 rounded-md border border-border bg-muted p-3 md:grid-cols-[0.8fr_1.2fr]">
-                    <ExecInput label="Name" value={variable.name} onChange={(value) => updateGlobalEnv(index, { name: value })} />
-                    <ExecInput
-                      label="Description"
-                      value={variable.description}
-                      onChange={(value) => updateGlobalEnv(index, { description: value })}
-                    />
-                  </div>
-                ))}
+              <div className="grid size-11 place-items-center rounded-md bg-muted text-muted-foreground">
+                <BookmarkPlus size={19} />
               </div>
-
-              <label className="grid gap-2">
-                <span className="font-primary text-xs font-medium text-muted-foreground">Local run notes</span>
-                <textarea
-                  className="min-h-24 resize-y rounded-md border border-border bg-card p-3 font-body text-sm leading-relaxed outline-none focus:border-primary"
-                  value={document.localRunNotes}
-                  onChange={(event) => updateDocument({ ...document, localRunNotes: event.target.value })}
-                />
-              </label>
+            </CardHeader>
+            <div className="grid gap-3">
+              <InfoRow label="Product" value={workspace.name} />
+              <InfoRow label="Repository" value={workspace.repo} />
+              <InfoRow label="Branch base" value={workspace.defaultBranch} />
+              <InfoRow label="Checks" value={`${workspace.testCommand} + ${workspace.buildCommand}`} />
+              <a className="mt-2 flex min-h-11 items-center justify-between rounded-md border border-border bg-background px-3 py-2 font-primary text-sm text-foreground hover:bg-muted" href={workspace.productionUrl} target="_blank" rel="noreferrer">
+                Open Shelfmark
+                <ArrowUpRight size={15} />
+              </a>
             </div>
-          ) : (
-            <div className="mt-4 rounded-md border border-[#E8C8C2] bg-[#F8E7E4] p-3 font-body text-sm text-[#A33A32]">
-              Fix the Markdown preview so the structured YAML blocks can be parsed.
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div>
+                <CardTitle>PM-safe boundaries</CardTitle>
+                <CardDescription>Judges get evidence, not unchecked production power.</CardDescription>
+              </div>
+              <ShieldCheck size={20} className="text-muted-foreground" />
+            </CardHeader>
+            <div className="grid gap-3">
+              <Boundary text="No automatic merge or deploy." />
+              <Boundary text="No secret or environment-file changes." />
+              <Boundary text="Every accepted request produces a reviewable PR." />
             </div>
-          )}
-        </div>
+          </Card>
+        </aside>
+      </section>
 
-        <ValidationPanel validation={validation} parseErrors={parsed.ok ? [] : parsed.errors} />
-      </div>
-
-      <div className="grid gap-4">
-        <div className="rounded-md border border-border bg-background p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <div>
-              <p className="font-primary text-sm font-medium">Editable exec.md preview</p>
-              <p className="mt-1 font-body text-xs text-muted-foreground">
-                Teams can edit this file directly in the workspace root.
-              </p>
-            </div>
-            <Badge tone={parsed.ok ? "success" : "danger"}>{parsed.ok ? "Parseable" : "Invalid"}</Badge>
-          </div>
-          <textarea
-            className="min-h-[520px] w-full resize-y rounded-md border border-border bg-muted p-4 font-mono text-xs leading-relaxed text-foreground outline-none focus:border-primary"
-            value={markdown}
-            onChange={(event) => onMarkdownChange(event.target.value)}
-          />
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2 self-end">
-          <Button variant="secondary" onClick={onValidate} disabled={loading !== null}>
-            {loading === "exec-validate" ? "Checking..." : "Check exec.md"}
-          </Button>
-          <Button icon={<FileText size={16} />} onClick={onSave} disabled={loading !== null || !parsed.ok}>
-            {loading === "exec-save" ? "Saving..." : "Save exec.md"}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ExecInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="grid gap-2">
-      <span className="font-primary text-xs text-muted-foreground">{label}</span>
-      <input
-        className="min-h-10 rounded-md border border-border bg-card px-3 font-mono text-xs outline-none focus:border-primary"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
-  );
-}
-
-function ValidationPanel({
-  validation,
-  parseErrors,
-}: {
-  validation: ExecSetupState["validation"];
-  parseErrors: ExecSetupState["validation"]["errors"];
-}) {
-  const errors = parseErrors.length > 0 ? parseErrors : validation.errors;
-  return (
-    <div className="rounded-md border border-border bg-background p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="font-primary text-sm font-medium">Validation</p>
-        <Badge tone={errors.length === 0 ? "success" : "danger"}>{errors.length === 0 ? "Ready" : "Blocked"}</Badge>
-      </div>
-      <div className="grid gap-2">
-        {errors.length === 0 ? (
-          <p className="font-body text-sm text-muted-foreground">No blocking errors. Warnings can be fixed later.</p>
-        ) : (
-          errors.map((issue) => (
-            <div key={issue.id} className="rounded-md bg-[#F8E7E4] p-3">
-              <p className="font-primary text-xs font-medium text-[#A33A32]">{issue.label}</p>
-              <p className="mt-1 font-body text-xs leading-relaxed text-[#A33A32]">{issue.detail}</p>
-            </div>
-          ))
-        )}
-        {validation.warnings.map((issue) => (
-          <div key={issue.id} className="rounded-md bg-[#F7ECE3] p-3">
-            <p className="font-primary text-xs font-medium text-[#A8663A]">{issue.label}</p>
-            <p className="mt-1 font-body text-xs leading-relaxed text-[#A8663A]">{issue.detail}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-type CurrentAction = {
-  label: string;
-  detail: string;
-  tone: "neutral" | "success" | "warning" | "danger" | "info";
-};
-
-function getCurrentAction(state: MvpState, reviewDecision: "idle" | "needs-revision"): CurrentAction {
-  const execReady = state.exec.exists && state.exec.validation.ready;
-  const latestRequest = state.requests[0];
-  const latestJob = state.jobs[0];
-  const stagingReady = state.deployment.staging.status === "ready";
-
-  if (!execReady) {
-    return {
-      label: "Waiting for execution settings",
-      detail: "Execution, WhatsApp, and GitHub setup must be ready before jobs can run.",
-      tone: "warning",
-    };
-  }
-  if (!latestRequest) {
-    return {
-      label: "Waiting for job",
-      detail: "Start a job to request a copy change, product change, or bug fix.",
-      tone: "neutral",
-    };
-  }
-  if (latestJob?.status === "blocked") {
-    return {
-      label: latestJob.currentAction,
-      detail: latestJob.logs[0] ?? "This job is blocked until setup is complete.",
-      tone: "warning",
-    };
-  }
-  if (latestJob?.status === "failed") {
-    return {
-      label: latestJob.currentAction,
-      detail: latestJob.logs[0] ?? "This job failed while preparing the workspace.",
-      tone: "danger",
-    };
-  }
-  if (latestJob?.status === "cloning") {
-    return {
-      label: "Getting repository",
-      detail: latestJob.currentAction,
-      tone: "info",
-    };
-  }
-  if (latestJob?.status === "branch-ready") {
-    return {
-      label: "Repository ready",
-      detail: `${latestJob.plan.repositories.length} repositories are cloned on ${latestJob.plan.branchName}.`,
-      tone: "success",
-    };
-  }
-  if (latestJob?.status === "healthy") {
-    return {
-      label: "Showing it locally",
-      detail: "Localhost services are healthy and ready for changes.",
-      tone: "success",
-    };
-  }
-  if (latestJob?.status === "waiting-for-approval") {
-    return {
-      label: "Waiting for approval",
-      detail: `${latestJob.changedFiles.length} changed files are ready for review.`,
-      tone: "warning",
-    };
-  }
-  if (latestJob?.status === "waiting-for-changes") {
-    return {
-      label: "Waiting for changes",
-      detail: latestJob.logs[0] ?? "Review feedback is ready for the next change iteration.",
-      tone: "warning",
-    };
-  }
-  if (latestJob?.status === "pr-open") {
-    return {
-      label: "Pull request open",
-      detail: latestJob.pullRequests[0]?.url ?? "Review the opened pull request.",
-      tone: "info",
-    };
-  }
-  if (!state.running) {
-    return {
-      label: "Getting repository",
-      detail: `${latestRequest.title} is captured. Corvin is ready to prepare the repo context for this job.`,
-      tone: "info",
-    };
-  }
-  if (!state.openAI.lastPlan || !stagingReady) {
-    return {
-      label: "Showing it locally",
-      detail: "The agent is preparing local output and a reviewable preview for this job.",
-      tone: "info",
-    };
-  }
-  if (reviewDecision === "needs-revision") {
-    return {
-      label: "Waiting for changes",
-      detail: "The review was sent back. The next run should prepare a revised preview.",
-      tone: "warning",
-    };
-  }
-  if (stagingReady) {
-    return {
-      label: "Waiting for approval",
-      detail: "A local preview is ready. Create a PR for engineering review or send it back for changes.",
-      tone: "warning",
-    };
-  }
-  return {
-    label: "Approved",
-    detail: "The reviewed change has been promoted for this job.",
-    tone: "success",
-  };
-}
-
-function CurrentActionBanner({
-  action,
-  apiAvailable,
-  execReady,
-}: {
-  action: CurrentAction;
-  apiAvailable: boolean;
-  execReady: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-3 rounded-md border border-border bg-card p-4 md:flex-row md:items-center md:justify-between">
-      <div>
-        <p className="font-primary text-xs text-muted-foreground">Current action</p>
-        <div className="mt-1 flex flex-wrap items-center gap-2">
-          <Badge tone={action.tone}>{action.label}</Badge>
-          <p className="font-body text-sm text-muted-foreground">{action.detail}</p>
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Badge tone={apiAvailable ? "success" : "warning"}>
-          {apiAvailable ? "Runner connected" : "Demo mode"}
-        </Badge>
-        <Badge tone={execReady ? "success" : "warning"}>{execReady ? "exec.md ready" : "exec.md required"}</Badge>
-      </div>
-    </div>
-  );
-}
-
-function SettingsSurface({
-  state,
-  loading,
-  whatsAppConnect,
-  onConfigureExec,
-  onWhatsApp,
-  onGitHub,
-  onOpenJob,
-}: {
-  state: MvpState;
-  loading: string | null;
-  whatsAppConnect: WhatsAppConnect | null;
-  onConfigureExec: () => void;
-  onWhatsApp: () => void;
-  onGitHub: () => void;
-  onOpenJob: () => void;
-}) {
-  const integrations = Object.fromEntries(state.integrations.map((integration) => [integration.id, integration]));
-  const execReady = state.exec.exists && state.exec.validation.ready;
-  const whatsApp = integrations.whatsapp;
-  const github = integrations.github;
-  const whatsAppConnected = whatsApp?.status === "connected" || whatsAppConnect?.connected;
-  const githubConnected = github?.status === "connected";
-
-  return (
-    <section className="grid gap-6">
-      <div className="flex justify-end">
-        <Button onClick={onOpenJob} disabled={!execReady}>
-          New request
-        </Button>
-      </div>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <SettingsCard
-          icon={<FileText size={24} />}
-          title="Execution"
-          status={execReady ? "Ready" : "Required"}
-          tone={execReady ? "success" : "warning"}
-          detail={execReady ? "exec.md is valid and can package job setup." : "Create exec.md before jobs can run."}
-          actionLabel="Configure execution"
-          onAction={onConfigureExec}
-        />
-        <SettingsCard
-          icon={<BrandIcon name="whatsapp" label="WhatsApp" />}
-          title="WhatsApp"
-          status={whatsAppConnected ? "Connected" : "Not connected"}
-          tone={whatsAppConnected ? "success" : "warning"}
-          detail={whatsAppConnected ? "WhatsApp intake is connected." : "Connect WhatsApp for message-based jobs."}
-          actionLabel={loading === "whatsapp" ? "Preparing..." : "Connect WhatsApp"}
-          onAction={whatsAppConnected ? undefined : onWhatsApp}
-        />
-        <SettingsCard
-          icon={<BrandIcon name="github" label="GitHub" />}
-          title="GitHub"
-          status={githubConnected ? "Connected" : "Not connected"}
-          tone={githubConnected ? "success" : "warning"}
-          detail={githubConnected ? "Repository access is connected." : "Connect GitHub before repository jobs run."}
-          actionLabel={loading === "github" ? "Connecting..." : "Connect GitHub"}
-          onAction={githubConnected ? undefined : onGitHub}
-        />
-      </div>
-    </section>
-  );
-}
-
-function SettingsCard({
-  icon,
-  title,
-  status,
-  tone,
-  detail,
-  actionLabel,
-  onAction,
-}: {
-  icon: ReactNode;
-  title: string;
-  status: string;
-  tone: CurrentAction["tone"];
-  detail: string;
-  actionLabel: string;
-  onAction?: () => void;
-}) {
-  return (
-    <Card className="flex min-h-72 flex-col p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="grid size-14 place-items-center rounded-md bg-muted text-foreground">{icon}</div>
-        <Badge tone={tone}>{status}</Badge>
-      </div>
-      <div className="mt-8">
-        <h2 className="font-primary text-xl font-medium">{title}</h2>
-        <p className="mt-3 max-w-sm font-body text-sm leading-relaxed text-muted-foreground">{detail}</p>
-      </div>
-      <div className="flex-1" />
-      {onAction ? (
-        <Button className="mt-6 w-full" variant="secondary" onClick={onAction}>
-          {actionLabel}
-        </Button>
-      ) : null}
-    </Card>
-  );
-}
-
-function BrandIcon({ name, label }: { name: "github" | "whatsapp"; label: string }) {
-  return (
-    <img
-      src={`/brand-icons/${name}.svg`}
-      alt={label}
-      className="size-7"
-    />
-  );
-}
-
-function JobSurface({
-  state,
-  requestBody,
-  requestType,
-  loading,
-  ready,
-  action,
-  reviewDecision,
-  onBodyChange,
-  onTypeChange,
-  onSubmit,
-  onPrepareContext,
-  onGeneratePlan,
-  onApplyChange,
-  onCreatePullRequest,
-  onStage,
-  onDemote,
-  onStop,
-}: {
-  state: MvpState;
-  requestBody: string;
-  requestType: string;
-  loading: string | null;
-  ready: boolean;
-  action: CurrentAction;
-  reviewDecision: "idle" | "needs-revision";
-  onBodyChange: (value: string) => void;
-  onTypeChange: (value: string) => void;
-  onSubmit: () => void;
-  onPrepareContext: () => void;
-  onGeneratePlan: () => void;
-  onApplyChange: () => void;
-  onCreatePullRequest: () => void;
-  onStage: () => void;
-  onDemote: () => void;
-  onStop: () => void;
-}) {
-  const latestJob = state.jobs[0];
-  return (
-    <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-      <div className="grid gap-6">
-        <RequestPanel
-          requestBody={requestBody}
-          requestType={requestType}
-          onBodyChange={onBodyChange}
-          onTypeChange={onTypeChange}
-          onSubmit={onSubmit}
-          loading={loading === "request"}
-          disabled={!ready}
-          ready={ready}
-        />
-        <JobControls
-          state={state}
-          loading={loading}
-          onPrepareContext={onPrepareContext}
-          onGeneratePlan={onGeneratePlan}
-          onApplyChange={onApplyChange}
-          onCreatePullRequest={onCreatePullRequest}
-          onStage={onStage}
-        />
-        <DeploymentPanel
-          deployment={state.deployment}
-          loading={loading}
-          onStage={onStage}
-          onDemote={onDemote}
-          reviewDecision={reviewDecision}
-        />
-      </div>
-      <aside className="grid content-start gap-6">
+      <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
         <Card>
           <CardHeader>
             <div>
-              <CardTitle>Job logs</CardTitle>
-              <CardDescription>Exactly what the agent is doing right now.</CardDescription>
+              <CardTitle>Latest outcome</CardTitle>
+              <CardDescription>What the judge receives after Corvin finishes the Shelfmark change.</CardDescription>
             </div>
-            <Badge tone={action.tone}>{action.label}</Badge>
+            <Badge tone={statusTone}>{latestRequest?.status ?? "Waiting"}</Badge>
           </CardHeader>
-          <div className="mb-4 rounded-md border border-border bg-background p-3">
-            <p className="font-primary text-sm font-medium">{action.label}</p>
-            <p className="mt-1 font-body text-xs leading-relaxed text-muted-foreground">{action.detail}</p>
-          </div>
-          {latestJob ? (
-            <div className="mb-4 rounded-md border border-border bg-background p-3">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <p className="font-primary text-sm font-medium">Workspace</p>
-                <Badge tone={latestJob.status === "failed" ? "danger" : latestJob.status === "blocked" ? "warning" : "info"}>
-                  {latestJob.status}
-                </Badge>
+          {latestRequest ? (
+            <div className="grid gap-4">
+              <OutcomeBlock icon={<FileText size={18} />} title="Summary" body={latestRequest.summary} />
+              <div className="grid gap-3 md:grid-cols-3">
+                <Metric label="Changed files" value={String(latestRequest.changedFiles.length)} />
+                <Metric label="Screenshots" value={String(latestRequest.screenshots.length)} />
+                <Metric label="Checks" value={String(latestRequest.verification.length)} />
               </div>
-              <p className="break-all font-mono text-xs text-muted-foreground">{latestJob.plan.branchName}</p>
-              <div className="mt-3 grid gap-2">
-                {latestJob.plan.repositories.map((repository) => (
-                  <div key={repository.id} className="rounded-md bg-muted p-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-primary text-xs font-medium">{repository.id}</p>
-                      <Badge tone={repository.status === "failed" ? "danger" : repository.status === "branch-ready" ? "success" : "neutral"}>
-                        {repository.status}
-                      </Badge>
-                    </div>
-                    <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{repository.localPath}</p>
-                  </div>
+              {latestRequest.pullRequestUrl ? (
+                <a className="flex min-h-12 items-center justify-between rounded-md border border-border bg-primary px-4 py-3 font-primary text-sm text-primary-text" href={latestRequest.pullRequestUrl} target="_blank" rel="noreferrer">
+                  Open pull request
+                  <ArrowUpRight size={16} />
+                </a>
+              ) : null}
+              {latestRequest.cloudRunUrl ? (
+                <a className="flex min-h-12 items-center justify-between rounded-md border border-border bg-background px-4 py-3 font-primary text-sm text-foreground hover:bg-muted" href={latestRequest.cloudRunUrl} target="_blank" rel="noreferrer">
+                  Open cloud agent run
+                  <ArrowUpRight size={16} />
+                </a>
+              ) : null}
+              <div className="grid gap-2">
+                {latestRequest.screenshots.map((screenshot) => (
+                  <a key={screenshot} className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-background px-3 py-2 font-primary text-sm text-foreground hover:bg-muted" href={screenshot} target="_blank" rel="noreferrer">
+                    <Camera size={16} />
+                    Screenshot evidence
+                  </a>
+                ))}
+                {latestRequest.verification.map((item) => (
+                  <p key={item} className="rounded-md border border-border bg-background p-3 font-mono text-xs text-muted-foreground">
+                    {item}
+                  </p>
                 ))}
               </div>
-              {latestJob.changedFiles.length > 0 ? (
-                <div className="mt-3 border-t border-border pt-3">
-                  <p className="font-primary text-xs font-medium">Changed files</p>
-                  <div className="mt-2 grid gap-1">
-                    {latestJob.changedFiles.slice(0, 6).map((file) => (
-                      <p key={`${file.repositoryId}-${file.path}`} className="break-all font-mono text-[11px] text-muted-foreground">
-                        {file.repositoryId}: {file.status} {file.path}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              {latestJob.reviewPackage ? (
-                <div className="mt-3 border-t border-border pt-3">
-                  <p className="font-primary text-xs font-medium">Engineering review summary</p>
-                  <div className="mt-2 grid gap-2 font-body text-xs text-muted-foreground">
-                    <p><span className="text-foreground">Wrong:</span> {latestJob.reviewPackage.wrong}</p>
-                    <p><span className="text-foreground">Fixed:</span> {latestJob.reviewPackage.fixed}</p>
-                    <p><span className="text-foreground">Revised:</span> {latestJob.reviewPackage.revised}</p>
-                  </div>
-                  {latestJob.reviewPackage.screenshots.length > 0 ? (
-                    <div className="mt-2 grid gap-1">
-                      {latestJob.reviewPackage.screenshots.map((screenshot) => (
-                        <a
-                          key={`${screenshot.label}-${screenshot.capturedAt}`}
-                          className="break-all font-mono text-[11px] text-foreground underline"
-                          href={screenshot.url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {screenshot.status}: {screenshot.label}
-                        </a>
-                      ))}
-                    </div>
-                  ) : null}
-                  {latestJob.reviewIterations.length > 0 ? (
-                    <div className="mt-3 rounded-md bg-muted p-2">
-                      <p className="font-primary text-xs font-medium text-foreground">GPT review loop</p>
-                      <div className="mt-2 grid gap-2">
-                        {latestJob.reviewIterations.slice(0, 3).map((iteration) => (
-                          <div key={iteration.id} className="font-body text-xs text-muted-foreground">
-                            <p>
-                              <span className="text-foreground">{iteration.mode}</span> {iteration.model}
-                            </p>
-                            <p>{iteration.summary}</p>
-                            {iteration.targetFile ? (
-                              <p className="break-all font-mono text-[11px]">{iteration.targetFile}</p>
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              {latestJob.pullRequests.length > 0 ? (
-                <div className="mt-3 border-t border-border pt-3">
-                  <p className="font-primary text-xs font-medium">Pull requests</p>
-                  <div className="mt-2 grid gap-1">
-                    {latestJob.pullRequests.map((pullRequest) => (
-                      <a
-                        key={pullRequest.url}
-                        className="break-all font-mono text-[11px] text-foreground underline"
-                        href={pullRequest.url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {pullRequest.repo}#{pullRequest.number}
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
             </div>
-          ) : null}
-          <div className="max-h-96 overflow-auto rounded-md border border-[#2B2730] bg-[#111015] p-4 font-mono text-xs leading-relaxed text-[#D8F3DC] shadow-inner">
-            {state.logs.map((line) => (
-              <p key={line} className="before:mr-2 before:text-[#8F6D83] before:content-['$']">{line}</p>
-            ))}
-          </div>
-          {state.running ? (
-            <Button className="mt-4 w-full" variant="secondary" onClick={onStop}>
-              Stop job
-            </Button>
-          ) : null}
+          ) : (
+            <EmptyOutcome />
+          )}
         </Card>
-      </aside>
-    </section>
-  );
-}
 
-function JobControls({
-  state,
-  loading,
-  onPrepareContext,
-  onGeneratePlan,
-  onApplyChange,
-  onCreatePullRequest,
-  onStage,
-}: {
-  state: MvpState;
-  loading: string | null;
-  onPrepareContext: () => void;
-  onGeneratePlan: () => void;
-  onApplyChange: () => void;
-  onCreatePullRequest: () => void;
-  onStage: () => void;
-}) {
-  const hasRequest = state.requests.length > 0;
-  const latestJob = state.jobs[0];
-  const canApplyChange = Boolean(latestJob && ["healthy", "branch-ready", "waiting-for-changes"].includes(latestJob.status));
-  const canCreatePullRequest = Boolean(latestJob?.changedFiles.length);
-  return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>Job actions</CardTitle>
-          <CardDescription>Actions appear in the order this job needs them.</CardDescription>
-        </div>
-      </CardHeader>
-      <div className="grid gap-3 md:grid-cols-5">
-        <Button variant="secondary" onClick={onPrepareContext} disabled={!hasRequest || loading !== null || state.running}>
-          {loading === "run" ? "Getting repository..." : "Get repository"}
-        </Button>
-        <Button variant="secondary" onClick={onGeneratePlan} disabled={!hasRequest || loading !== null}>
-          {loading === "openai" ? "Planning..." : "Plan change"}
-        </Button>
-        <Button variant="secondary" onClick={onApplyChange} disabled={!canApplyChange || loading !== null}>
-          {loading === "apply-change" ? "Applying..." : "Apply change"}
-        </Button>
-        <Button variant="secondary" onClick={onCreatePullRequest} disabled={!canCreatePullRequest || loading !== null}>
-          {loading === "create-pr" ? "Opening PR..." : "Create PR"}
-        </Button>
-        <Button onClick={onStage} disabled={!hasRequest || loading !== null}>
-          {loading === "staging" ? "Showing locally..." : "Show locally"}
-        </Button>
-      </div>
-    </Card>
-  );
-}
-
-function DeploymentPanel({
-  deployment,
-  loading,
-  onStage,
-  onDemote,
-  reviewDecision,
-}: {
-  deployment: DeploymentDemoState;
-  loading: string | null;
-  onStage: () => void;
-  onDemote: () => void;
-  reviewDecision: "idle" | "needs-revision";
-}) {
-  const stagingReady = deployment.staging.status === "ready";
-
-  return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>Review build</CardTitle>
-          <CardDescription>Prepare local evidence for engineering review.</CardDescription>
-        </div>
-        <Badge tone={stagingReady ? "info" : "neutral"}>
-          {stagingReady ? "Ready for PR" : "No review yet"}
-        </Badge>
-      </CardHeader>
-      <div className="grid gap-3">
-        <EnvironmentPreview env={stagingReady ? deployment.staging : deployment.local} />
-      </div>
-      <div className="mt-5 flex flex-wrap gap-2">
-        {!stagingReady ? (
-          <Button onClick={onStage} disabled={loading !== null}>
-            {loading === "staging" ? "Preparing..." : "Prepare review"}
-          </Button>
-        ) : null}
-        {stagingReady && reviewDecision === "idle" ? (
-          <>
-            <Badge tone="info">Ready for engineering review</Badge>
-            <Button variant="secondary" onClick={onDemote} disabled={loading !== null}>
-              Send back
-            </Button>
-          </>
-        ) : null}
-        {stagingReady && reviewDecision === "needs-revision" ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <Badge tone="warning">Sent back for revision</Badge>
-            <Button variant="secondary" onClick={onStage} disabled={loading !== null}>
-              Prepare revised review
-            </Button>
-          </div>
-        ) : null}
-      </div>
-      <div className="mt-5 rounded-md border border-[#2B2730] bg-[#111015] p-3 shadow-inner">
-        <ul className="mt-2 grid gap-1 font-mono text-xs text-[#D8F3DC]">
-          {deployment.auditTrail.slice(-3).map((item) => (
-            <li key={item} className="before:mr-2 before:text-[#8F6D83] before:content-['>']">{item}</li>
-          ))}
-        </ul>
-      </div>
-    </Card>
-  );
-}
-
-function EnvironmentPreview({ env, compact = false }: { env: AppEnvironment; compact?: boolean }) {
-  return (
-    <div className="rounded-md border border-border bg-background p-4">
-      <div className="mb-4 flex items-center justify-between gap-2">
-        <div>
-          <p className="font-primary text-sm font-medium">{env.label}</p>
-          <a className="font-mono text-xs text-muted-foreground underline" href={env.url} target="_blank" rel="noreferrer">
-            {env.url.replace("https://", "").replace("http://", "")}
-          </a>
-        </div>
-        <Badge tone={env.status === "live" || env.status === "ready" ? "success" : "neutral"}>{env.status}</Badge>
-      </div>
-      <div className="rounded-md border border-border bg-card p-4">
-        <p className="font-primary text-xs text-muted-foreground">Checkout preview</p>
-        <h3 className="mt-2 font-primary text-lg font-medium leading-tight">{env.headline}</h3>
-        {!compact ? <p className="mt-2 font-body text-sm leading-relaxed text-muted-foreground">{env.subcopy}</p> : null}
-        <Button className="mt-4 w-full" variant={env.id === "production" ? "primary" : "secondary"}>
-          Continue to payment
-        </Button>
-      </div>
-      <p className="mt-3 font-body text-xs text-muted-foreground">Updated by {env.lastUpdatedBy}</p>
-    </div>
-  );
-}
-
-function WhatsAppQrModal({
-  connect,
-  loading,
-  onClose,
-  onRefresh,
-  onNewQr,
-}: {
-  connect: WhatsAppConnect;
-  loading: boolean;
-  onClose: () => void;
-  onRefresh: () => void;
-  onNewQr: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">
-      <div className="w-full max-w-2xl rounded-md border border-border bg-card p-5 shadow-xl">
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div>
-            <h2 className="font-primary text-xl font-medium">Connect WhatsApp</h2>
-            <p className="mt-1 font-body text-sm text-muted-foreground">
-              {connect.connected ? "This WhatsApp account is connected" : connect.detail}
-            </p>
-          </div>
-          <button
-            className="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-            onClick={onClose}
-            aria-label="Close WhatsApp QR"
-          >
-            <X size={18} />
-          </button>
-        </div>
-        <div className="grid gap-5 md:grid-cols-[380px_minmax(0,1fr)]">
-          <div className="grid place-items-center rounded-md border border-border bg-background p-4">
-            {connect.qrImageUrl ? (
-              <img src={connect.qrImageUrl} alt="WhatsApp pairing QR" className="size-[360px] max-w-full" />
-            ) : (
-              <div className="grid size-[360px] max-w-full place-items-center rounded-md bg-muted text-muted-foreground">
-                <Loader2 className="animate-spin" size={24} />
-              </div>
-            )}
-          </div>
-          <div className="rounded-md border border-border bg-background p-4">
-            <div className="mb-2 flex items-center gap-2 font-primary text-sm font-medium">
-              <QrCode size={16} />
-              Linked device QR
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Recent judge requests</CardTitle>
+              <CardDescription>Quick scan for repeated review attempts.</CardDescription>
             </div>
-            <p className="font-body text-sm leading-relaxed text-muted-foreground">
-              In WhatsApp, open Settings or Menu, choose Linked devices, tap Link a device, then scan this code.
-            </p>
-            {connect.qrUpdatedAt ? (
-              <p className="mt-2 font-mono text-xs text-muted-foreground">
-                QR refreshed {new Date(connect.qrUpdatedAt).toLocaleTimeString()}
+          </CardHeader>
+          <div className="grid gap-3">
+            {recentRequests.slice(0, 4).map((request) => (
+              <div key={request.id} className="rounded-md border border-border bg-background p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <Badge tone={request.status === "pr-open" ? "success" : request.status === "blocked" || request.status === "failed" ? "warning" : "neutral"}>
+                    {request.status}
+                  </Badge>
+                  <span className="font-mono text-[11px] text-muted-foreground">{request.id}</span>
+                </div>
+                <p className="line-clamp-3 font-body text-sm leading-relaxed text-muted-foreground">{request.body}</p>
+              </div>
+            ))}
+            {recentRequests.length === 0 ? (
+              <p className="rounded-md border border-dashed border-border bg-background p-4 font-body text-sm leading-relaxed text-muted-foreground">
+                No judge requests yet. Submit one above to create review evidence.
               </p>
             ) : null}
           </div>
-        </div>
-        <div className="mt-5 flex flex-wrap justify-end gap-2">
-            <Button onClick={onRefresh} disabled={loading || connect.connected}>
-              {connect.connected ? "Connected" : "Refresh status"}
-            </Button>
-            <Button variant="secondary" onClick={onNewQr} disabled={loading || connect.connected}>
-              {loading ? "Refreshing..." : "New QR code"}
-            </Button>
-        </div>
+        </Card>
+      </section>
+    </main>
+  );
+}
+
+function PlainStep({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
+  return (
+    <div className="flex gap-3">
+      <div className="grid size-9 shrink-0 place-items-center rounded-md bg-card text-muted-foreground">{icon}</div>
+      <div>
+        <p className="font-primary text-sm font-medium">{title}</p>
+        <p className="mt-1 font-body text-xs leading-relaxed text-muted-foreground">{body}</p>
       </div>
     </div>
   );
 }
 
-function RequestPanel({
-  requestBody,
-  requestType,
-  onBodyChange,
-  onTypeChange,
-  onSubmit,
-  loading,
-  disabled,
-  ready,
-}: {
-  requestBody: string;
-  requestType: string;
-  onBodyChange: (value: string) => void;
-  onTypeChange: (value: string) => void;
-  onSubmit: () => void;
-  loading: boolean;
-  disabled: boolean;
-  ready: boolean;
-}) {
+function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>Request a change</CardTitle>
-          <CardDescription>Capture the PM request once setup is ready.</CardDescription>
-        </div>
-        <Badge tone={ready ? "success" : "warning"}>{ready ? "Ready" : "Setup required"}</Badge>
-      </CardHeader>
-      <div className="grid gap-4">
-        <div className="flex flex-wrap gap-2">
-          {["Copy change", "Bug fix", "Product idea"].map((type) => (
-            <Button
-              key={type}
-              variant={type === requestType ? "primary" : "secondary"}
-              onClick={() => onTypeChange(type)}
-            >
-              {type}
-            </Button>
-          ))}
-        </div>
-        <textarea
-          className="min-h-28 resize-y rounded-md border border-border bg-card p-3 font-body text-sm leading-relaxed text-foreground outline-none focus:border-primary"
-          value={requestBody}
-          onChange={(event) => onBodyChange(event.target.value)}
-        />
-        <Button onClick={onSubmit} disabled={disabled || loading || !requestBody.trim()}>
-          {loading ? (
-            <>
-              <Loader2 className="animate-spin" size={16} />
-              Capturing
-            </>
-          ) : (
-            "Capture request"
-          )}
-        </Button>
+    <div className="rounded-md border border-border bg-background p-3">
+      <p className="font-primary text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 break-words font-mono text-xs text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function Boundary({ text }: { text: string }) {
+  return (
+    <div className="flex items-start gap-2 font-body text-sm leading-relaxed text-muted-foreground">
+      <CheckCircle2 className="mt-0.5 shrink-0 text-foreground" size={16} />
+      {text}
+    </div>
+  );
+}
+
+function OutcomeBlock({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
+  return (
+    <div className="flex gap-3 rounded-md border border-border bg-background p-4">
+      <div className="grid size-10 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">{icon}</div>
+      <div>
+        <p className="font-primary text-sm font-medium">{title}</p>
+        <p className="mt-1 font-body text-sm leading-relaxed text-muted-foreground">{body}</p>
       </div>
-    </Card>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-background p-4">
+      <p className="font-primary text-2xl font-medium">{value}</p>
+      <p className="mt-1 font-body text-xs text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+function EmptyOutcome() {
+  return (
+    <div className="rounded-md border border-dashed border-border bg-background p-8 text-center">
+      <div className="mx-auto grid size-12 place-items-center rounded-md bg-muted text-muted-foreground">
+        <GitPullRequest size={20} />
+      </div>
+      <p className="mt-4 font-primary text-lg font-medium">No PR evidence yet</p>
+      <p className="mx-auto mt-2 max-w-prose font-body text-sm leading-relaxed text-muted-foreground">
+        Once a judge submits a request, Corvin will show the resulting pull request, screenshot, checks, and summary here.
+      </p>
+    </div>
   );
 }
 
@@ -1489,8 +1109,6 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
     },
     ...init,
   });
-  if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
   return (await response.json()) as T;
 }
