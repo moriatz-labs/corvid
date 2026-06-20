@@ -62,7 +62,7 @@ type ShelfmarkWorkspaceResponse = {
 const fallbackWorkspace: ShelfmarkWorkspace = {
   id: "shelfmark",
   name: "Shelfmark",
-  repo: "Paul-M-Kallarackal/shelfmark",
+  repo: "moriatz-labs/shelfmark",
   defaultBranch: "main",
   branchPrefix: "feature/shelfmark-judge",
   localPath: "C:/Users/loqpm/Documents/Shelfmark",

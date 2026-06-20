@@ -36,7 +36,7 @@ export type ShelfmarkJudgeRequest = {
 export const shelfmarkWorkspacePreset: ShelfmarkWorkspacePreset = {
   id: "shelfmark",
   name: "Shelfmark",
-  repo: process.env.SHELFMARK_GITHUB_REPO ?? "Paul-M-Kallarackal/shelfmark",
+  repo: process.env.SHELFMARK_GITHUB_REPO ?? "moriatz-labs/shelfmark",
   defaultBranch: process.env.SHELFMARK_DEFAULT_BRANCH ?? "main",
   branchPrefix: "feature/shelfmark-judge",
   localPath: process.env.SHELFMARK_LOCAL_PATH ?? "C:/Users/loqpm/Documents/Shelfmark",

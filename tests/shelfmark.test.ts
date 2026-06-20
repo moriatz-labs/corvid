@@ -27,7 +27,7 @@ describe("Shelfmark judge workflow", () => {
         status: "queued",
       }),
     );
-    expect(request.workspace.repo).toBe("Paul-M-Kallarackal/shelfmark");
+    expect(request.workspace.repo).toBe("moriatz-labs/shelfmark");
     expect(request.workspace.localPath).toContain("Shelfmark");
   });
 

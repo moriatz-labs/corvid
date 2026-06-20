@@ -45,7 +45,7 @@ Required Corvin environment variables for the public flow:
 ```text
 VITE_CLERK_PUBLISHABLE_KEY=
 GITHUB_TOKEN=
-SHELFMARK_GITHUB_REPO=Paul-M-Kallarackal/shelfmark
+SHELFMARK_GITHUB_REPO=moriatz-labs/shelfmark
 SHELFMARK_LOCAL_PATH=C:/Users/loqpm/Documents/Shelfmark
 SHELFMARK_PRODUCTION_URL=https://shelfmark.vercel.app
 SHELFMARK_NOVUS_INSTALLED=true
