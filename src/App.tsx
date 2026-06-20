@@ -141,7 +141,7 @@ const fallbackWorkspace: ShelfmarkWorkspace = {
   buildCommand: "npm run build",
   screenshotPath: "/",
   noticeFile: "src/content/judge-request.ts",
-  novusInstalled: true,
+  novusInstalled: false,
 };
 
 const starterRequest = "Make Shelfmark's onboarding clearer for product managers saving research and customer evidence.";
@@ -166,7 +166,7 @@ const fallbackRepositories: OnboardingRepository[] = [
     productionUrl: "https://shelfmark.vercel.app",
     screenshotPaths: ["/", "/collections", "/search"],
     canRunJudgeRequests: true,
-    novusInstalled: true,
+    novusInstalled: false,
   },
   {
     id: "corvin",
