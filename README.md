@@ -1,6 +1,6 @@
 # Corvin Hackathon MVP
 
-Corvin is a PM-visible workbench for agentic autonomy in a multi-repository setting. Engineering supplies an execution packet once; OpenAI-powered agents resolve repositories, startup order, branch coupling, and service health; the PM runs one prepared command, reviews a visible local/staging change, and pushes the reviewed result to a production app demo.
+Corvin is a PM-visible workbench for agentic product changes in real repositories. A PM connects a Moriatz Labs repo, Corvin scans the codebase, generates `exec.md` during onboarding, and then turns a natural-language product request into a branch, verification evidence, screenshots, and a pull request.
 
 ## Run
 
@@ -25,6 +25,17 @@ Their source seeds live under `demo-repositories/` in this workspace. Corvin's
 public setup flow loads these repositories when GitHub is connected, then
 generates `exec.md` from the frontend and backend selections.
 
+## Repository Onboarding
+
+The default public flow is a Novus-style onboarding sequence:
+
+1. Connect a Moriatz Labs GitHub repository.
+2. Let Corvin scan framework, commands, health URLs, pages, env keys, and analytics status.
+3. Generate and save `exec.md` automatically.
+4. Open the PM workbench for reviewable repository changes.
+
+The PM does not author the execution packet, and engineering does not need to prepare one by hand for the Shelfmark flow. The onboarding screen currently lists multiple Moriatz Labs repositories, with Shelfmark configured as the PM-ready judged product.
+
 ## Shelfmark Judge Workflow
 
 Corvin also includes a real external-product workflow for Shelfmark, the sibling
@@ -34,7 +45,7 @@ bookmarking product repository at:
 C:\Users\loqpm\Documents\Shelfmark
 ```
 
-Judges sign into Corvin with Clerk, open the Shelfmark view, and submit an
+Judges sign into Corvin with Clerk, complete repository onboarding, and submit an
 open-text product change. Corvin applies a safe visible change to Shelfmark's
 `src/content/judge-request.ts`, runs Shelfmark install/test/build, captures a
 review screenshot, commits the branch, and opens a GitHub pull request when a
@@ -96,7 +107,7 @@ npm run lint
 
 1. Connect WhatsApp entry point.
 2. Resolve repository metadata.
-3. Load engineering execution packet.
+3. Generate `exec.md` from repository onboarding.
 4. Validate agent-run setup.
 5. Generate Compose from the packet.
 6. Run the PM one-line command.
@@ -107,21 +118,21 @@ npm run lint
 
 The dashboard shows these steps and advances them through the local API.
 
-## Engineering Execution Packet
+## AI-Generated Execution Packet
 
-The PM should not manually load, sync, or wire repositories. If `exec.md` is missing or invalid, Corvin blocks the PM request and asks the first user to complete the setup form first.
+The PM should not manually load, sync, or wire repositories. If `exec.md` is missing, Corvin's onboarding flow generates it from the connected repository before the PM workbench opens.
 
-For the demo, `exec.md` lives in the workspace root. It is a human-editable Markdown file with parseable YAML sections. The setup UI creates it through a hybrid editor: survey fields on the left and editable Markdown preview on the right.
+For the demo, `exec.md` lives in the workspace root. It is a parseable Markdown file with YAML sections for repositories and environment metadata. The onboarding UI generates it from repository selection and scan results, then shows the generated Markdown preview before moving into the PM request workflow.
 
-Engineering needs to provide:
+Corvin infers:
 
 - Repository names and ownership.
 - What each repository does.
-- Install, dev, and health-check details for each selected GitHub-linked repository.
+- Install, dev, test, build, and health-check details.
 - Global and per-repository environment variables.
-- Local run notes for seed data, known setup failures, ports, and caveats.
+- Local run notes for seed data, analytics, screenshot targets, ports, and caveats.
 
-After `exec.md` is valid, the PM path is intentionally simple: Corvin reads the file, packages the local run workflow at runtime, and runs the safe-mode demo command set. The PM does not type repo commands.
+After `exec.md` is valid, the PM path is intentionally simple: Corvin reads the file, packages the local run workflow at runtime, and prepares review evidence. The PM does not type repo commands.
 
 Example shape:
 
@@ -177,8 +188,8 @@ All AI routing uses OpenAI. The current demo shows the intended routing policy:
 ## Demo Story
 
 1. The product manager `Maya Rao` is visible in the dashboard.
-2. Show the engineering execution packet as already complete for the Corvin Demo App workspace.
-3. Show `exec.md` as the editable engineering setup file for local run packaging.
+2. Show the repository onboarding scan as complete for the selected workspace.
+3. Show `exec.md` as the AI-generated setup file from repository onboarding.
 4. Maya asks to change checkout copy.
 5. Corvin routes the request through OpenAI-only agents.
 6. The change is applied visibly to local preview and staging.

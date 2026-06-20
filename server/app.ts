@@ -40,6 +40,11 @@ import {
   shelfmarkWorkspacePreset,
   type ShelfmarkJudgeRequest,
 } from "../src/shared/shelfmark.js";
+import {
+  defaultOnboardingRepositories,
+  findOnboardingRepository,
+  generateOnboardingScan,
+} from "../src/shared/onboarding.js";
 import type {
   ExecDocument,
   ExecSetupState,
@@ -146,6 +151,41 @@ app.get("/api/shelfmark/workspace", (_request, response) => {
 
 app.get("/api/shelfmark/requests", (_request, response) => {
   response.json({ requests: shelfmarkRequests });
+});
+
+app.get("/api/onboarding/repositories", (_request, response) => {
+  response.json({
+    account: "moriatz-labs",
+    repositories: defaultOnboardingRepositories,
+    githubReady: Boolean(getGitHubCloneToken()),
+  });
+});
+
+app.post("/api/onboarding/scan", (request, response) => {
+  const repository = findOnboardingRepository(String(request.body.repositoryId ?? request.body.repo ?? ""));
+  if (!repository) {
+    response.status(404).json({
+      error: "repository_not_found",
+      message: "Select a repository from the Moriatz Labs onboarding list.",
+    });
+    return;
+  }
+
+  const scan = generateOnboardingScan(repository);
+  const validation = validateExecDocument(scan.execDocument, getDemoEnvValues());
+  const scanResult = {
+    ...scan,
+    validation,
+  };
+
+  writeFileSync(execFileUrl, scan.execMarkdown, "utf8");
+  applyExecDocument(scan.execDocument, scan.execMarkdown);
+  state.logs.unshift(`[onboarding] Corvin AI generated exec.md for ${repository.repo}`);
+
+  response.json({
+    ...scanResult,
+    exec: state.exec,
+  });
 });
 
 app.post("/api/shelfmark/requests", async (request, response) => {
