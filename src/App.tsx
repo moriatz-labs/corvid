@@ -23,6 +23,16 @@ import type {
   WhatsAppConnect,
 } from "./shared/types";
 
+declare global {
+  interface Window {
+    pendo?: {
+      track?: (name: string, properties?: Record<string, string | number | boolean>) => void;
+    };
+  }
+}
+
+const trackedIntegrations = new Set<string>();
+
 const fallbackState = createInitialState();
 
 export default function App() {
@@ -94,6 +104,12 @@ export default function App() {
     const next = await api<WhatsAppConnect>("/api/integrations/whatsapp/status");
     setWhatsAppConnect(next);
     if (next.connected) {
+      if (!trackedIntegrations.has("whatsapp")) {
+        trackedIntegrations.add("whatsapp");
+        window.pendo?.track?.("whatsapp_connected", {
+          workspaceName: state.workspace.name,
+        });
+      }
       await refreshState();
     }
   }
@@ -140,6 +156,12 @@ export default function App() {
     const status = await api<{ connected: boolean; error?: string }>("/api/integrations/github/status");
     if (status.connected || status.error) {
       setGithubPolling(false);
+      if (status.connected && !trackedIntegrations.has("github")) {
+        trackedIntegrations.add("github");
+        window.pendo?.track?.("github_connected", {
+          workspaceName: state.workspace.name,
+        });
+      }
       await refreshState();
     }
   }
@@ -154,6 +176,12 @@ export default function App() {
       } else if (result.exec) {
         setState((current) => ({ ...current, exec: result.exec as ExecSetupState }));
       }
+      window.pendo?.track?.("workspace_run_started", {
+        repositoryCount: state.workspace.repositories.length,
+        workspaceName: state.workspace.name,
+        requestId: state.requests[0]?.id ?? "",
+        success: response.ok,
+      });
       await refreshState();
     } finally {
       setLoading(null);
@@ -180,6 +208,14 @@ export default function App() {
           requester: "pm@acme.local",
         }),
       }),
+      () => {
+        window.pendo?.track?.("change_request_submitted", {
+          requestType,
+          requestBodyLength: requestBody.length,
+          channel: "web",
+          workspaceName: state.workspace.name,
+        });
+      },
     );
   }
 
@@ -191,7 +227,16 @@ export default function App() {
           method: "POST",
           body: JSON.stringify({ requestBody }),
         }),
-      (plan) => setState((current) => ({ ...current, openAI: { ...current.openAI, lastPlan: plan } })),
+      (plan) => {
+        setState((current) => ({ ...current, openAI: { ...current.openAI, lastPlan: plan } }));
+        window.pendo?.track?.("ai_plan_generated", {
+          model: plan.model,
+          mode: plan.mode,
+          stepCount: plan.steps.length,
+          requestBodyLength: requestBody.length,
+          workspaceName: state.workspace.name,
+        });
+      },
     );
   }
 
@@ -206,7 +251,15 @@ export default function App() {
             headline: state.openAI.lastPlan?.recommendedHeadline,
           }),
         }),
-      (deployment) => setState((current) => ({ ...current, deployment })),
+      (deployment) => {
+        setState((current) => ({ ...current, deployment }));
+        window.pendo?.track?.("staging_deployed", {
+          requestId: state.requests[0]?.id ?? "",
+          headline: state.openAI.lastPlan?.recommendedHeadline ?? "",
+          workspaceName: state.workspace.name,
+          pmName: state.pm.name,
+        });
+      },
     );
     setReviewDecision("idle");
   }
@@ -221,11 +274,18 @@ export default function App() {
           method: "POST",
           body: JSON.stringify({ feedback: reviewDecision === "needs-revision" ? "Apply requested review changes." : "" }),
         }),
-      (nextJob) =>
+      (nextJob) => {
         setState((current) => ({
           ...current,
           jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
-        })),
+        }));
+        window.pendo?.track?.("job_change_applied", {
+          jobId: nextJob.id,
+          changedFileCount: nextJob.changedFiles.length,
+          hasFeedback: reviewDecision === "needs-revision",
+          reviewIterationCount: nextJob.reviewIterations.length,
+        });
+      },
     );
   }
 
@@ -235,11 +295,19 @@ export default function App() {
     await runAction(
       "create-pr",
       () => api<MvpState["jobs"][number]>(`/api/jobs/${job.id}/pull-request`, { method: "POST" }),
-      (nextJob) =>
+      (nextJob) => {
         setState((current) => ({
           ...current,
           jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
-        })),
+        }));
+        window.pendo?.track?.("pull_request_created", {
+          jobId: nextJob.id,
+          repositoryCount: nextJob.plan.repositories.length,
+          changedFileCount: nextJob.changedFiles.length,
+          pullRequestCount: nextJob.pullRequests.length,
+          workspaceName: state.workspace.name,
+        });
+      },
     );
   }
 
@@ -262,6 +330,11 @@ export default function App() {
           ...current,
           jobs: current.jobs.map((item) => (item.id === nextJob.id ? nextJob : item)),
         }));
+        window.pendo?.track?.("review_changes_requested", {
+          jobId: nextJob.id,
+          reviewIterationCount: nextJob.reviewIterations.length,
+          workspaceName: state.workspace.name,
+        });
       },
     );
   }
@@ -291,6 +364,16 @@ export default function App() {
       const exec = (await response.json()) as ExecSetupState;
       setState((current) => ({ ...current, exec }));
       if (response.ok) {
+        const parsedDoc = parseExecMarkdown(execMarkdown);
+        const doc = parsedDoc.ok ? parsedDoc.document : null;
+        window.pendo?.track?.("exec_md_saved", {
+          repositoryCount: doc?.repositories.length ?? 0,
+          envVarCount: doc?.environment.global.length ?? 0,
+          validationReady: exec.validation.ready,
+          errorCount: exec.validation.errors.length,
+          warningCount: exec.validation.warnings.length,
+          workspaceName: state.workspace.name,
+        });
         await refreshState();
       }
     } finally {
