@@ -25,6 +25,36 @@ Their source seeds live under `demo-repositories/` in this workspace. Corvin's
 public setup flow loads these repositories when GitHub is connected, then
 generates `exec.md` from the frontend and backend selections.
 
+## Shelfmark Judge Workflow
+
+Corvin also includes a real external-product workflow for Shelfmark, the sibling
+bookmarking product repository at:
+
+```text
+C:\Users\loqpm\Documents\Shelfmark
+```
+
+Judges sign into Corvin with Clerk, open the Shelfmark view, and submit an
+open-text product change. Corvin applies a safe visible change to Shelfmark's
+`src/content/judge-request.ts`, runs Shelfmark install/test/build, captures a
+review screenshot, commits the branch, and opens a GitHub pull request when a
+GitHub token is configured.
+
+Required Corvin environment variables for the public flow:
+
+```text
+VITE_CLERK_PUBLISHABLE_KEY=
+GITHUB_TOKEN=
+SHELFMARK_GITHUB_REPO=Paul-M-Kallarackal/shelfmark
+SHELFMARK_LOCAL_PATH=C:/Users/loqpm/Documents/Shelfmark
+SHELFMARK_PRODUCTION_URL=https://shelfmark.vercel.app
+SHELFMARK_NOVUS_INSTALLED=true
+```
+
+Safety guardrails block requests that try to read secrets, edit environment
+files, delete repositories, merge, or deploy production. Corvin creates PRs only;
+it does not merge or deploy judge-created changes.
+
 ## Deploy
 
 The project is Vercel-ready with `vercel.json` and an API catch-all function in `api/[...path].ts`.

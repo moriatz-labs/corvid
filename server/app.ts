@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import "./env.js";
 import cors from "cors";
 import express from "express";
@@ -23,10 +24,22 @@ import {
   parseWhatsAppPayload,
   promoteStagingToProduction,
   stageRequestedChange,
+  upsertPMRequest,
   validateExecDocument,
   validateBlueprint,
 } from "../src/shared/mvp.js";
-import { createCorvinDemoBlueprint, createPublicInitialState } from "../src/shared/demo.js";
+import {
+  createConnectedDemoStartState,
+  createCorvinDemoBlueprint,
+  createPublicInitialState,
+} from "../src/shared/demo.js";
+import {
+  createShelfmarkJudgeRequest,
+  renderShelfmarkNoticeModule,
+  renderShelfmarkPullRequestBody,
+  shelfmarkWorkspacePreset,
+  type ShelfmarkJudgeRequest,
+} from "../src/shared/shelfmark.js";
 import type {
   ExecDocument,
   ExecSetupState,
@@ -39,14 +52,19 @@ import type {
 } from "../src/shared/types.js";
 import type { WhatsAppIntake } from "../src/shared/types.js";
 import {
+  forceNewWhatsAppPairing,
   getWhatsAppSnapshot,
   refreshWhatsAppConnector,
   sendWhatsAppMessage,
+  shouldReuseWhatsAppSession,
   startWhatsAppConnector,
 } from "./whatsapp.js";
+import { shouldRestoreGitHubSession } from "./github-session.js";
 
 export const app = express();
-export const state: MvpState = createPublicInitialState();
+const connectedDemoStart = process.env.CORVIN_CONNECTED_DEMO !== "false";
+
+export const state: MvpState = connectedDemoStart ? createConnectedDemoStartState() : createPublicInitialState();
 const execFileUrl = new URL("../exec.md", import.meta.url);
 const corvinDataDirUrl = new URL("../.corvin/", import.meta.url);
 const githubAuthFileUrl = new URL("../.corvin/github-auth.json", import.meta.url);
@@ -78,6 +96,7 @@ const githubConnection: GitHubConnection = {
   scopes: [],
 };
 const jobDevProcesses = new Map<string, ChildProcess>();
+const shelfmarkRequests: ShelfmarkJudgeRequest[] = [];
 
 state.openAI = {
   ...state.openAI,
@@ -85,7 +104,29 @@ state.openAI = {
   configured: Boolean(openAIClient),
   routing: createOpenAIRoutingPlan(),
 };
-restoreGitHubConnection();
+if (connectedDemoStart || shouldRestoreGitHubSession(process.env)) {
+  restoreGitHubConnection();
+  if (connectedDemoStart && !githubConnection.connected) {
+    connectDemoGitHubSession();
+  }
+} else {
+  state.logs.unshift("[github] saved session restore is disabled; use Connect GitHub for this demo");
+}
+
+if (connectedDemoStart && process.env.CORVIN_WHATSAPP_AUTOSTART !== "false") {
+  void startWhatsAppConnector(async (intake) => {
+    await captureWhatsAppIntake(intake);
+  })
+    .then((connection) => {
+      if (connection.connected) {
+        syncWhatsAppConnection(connection);
+      }
+      state.logs.unshift(`[whatsapp] listener ${connection.status}`);
+    })
+    .catch((error) => {
+      state.logs.unshift(`[whatsapp] listener failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    });
+}
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
@@ -93,6 +134,43 @@ app.use("/artifacts", express.static(".corvin/jobs"));
 
 app.get("/api/state", (_request, response) => {
   response.json(state);
+});
+
+app.get("/api/shelfmark/workspace", (_request, response) => {
+  response.json({
+    workspace: shelfmarkWorkspacePreset,
+    requests: shelfmarkRequests,
+    githubReady: Boolean(getGitHubCloneToken()),
+  });
+});
+
+app.get("/api/shelfmark/requests", (_request, response) => {
+  response.json({ requests: shelfmarkRequests });
+});
+
+app.post("/api/shelfmark/requests", async (request, response) => {
+  const judgeRequest = createShelfmarkJudgeRequest({
+    body: String(request.body.body ?? ""),
+    requester: String(request.body.requester ?? "judge@local"),
+  });
+  shelfmarkRequests.unshift(judgeRequest);
+
+  if (judgeRequest.status === "blocked") {
+    state.logs.unshift(`[shelfmark] blocked ${judgeRequest.id}: ${judgeRequest.blockedReason}`);
+    response.status(409).json(judgeRequest);
+    return;
+  }
+
+  try {
+    await runShelfmarkJudgeRequest(judgeRequest);
+    response.json(judgeRequest);
+  } catch (error) {
+    judgeRequest.status = "failed";
+    judgeRequest.summary = error instanceof Error ? error.message : "Shelfmark request failed.";
+    judgeRequest.updatedAt = new Date().toISOString();
+    state.logs.unshift(`[shelfmark] ${judgeRequest.id} failed: ${judgeRequest.summary}`);
+    response.status(502).json(judgeRequest);
+  }
 });
 
 app.get("/api/exec", (_request, response) => {
@@ -250,6 +328,10 @@ app.get("/api/integrations/github/callback", async (request, response) => {
 app.get("/api/integrations/whatsapp/connect", async (request, response) => {
   const protocol = String(request.headers["x-forwarded-proto"] ?? request.protocol ?? "http").split(",")[0];
   const host = request.headers.host ?? `localhost:${process.env.CORVIN_API_PORT ?? 8787}`;
+  if (!shouldReuseWhatsAppSession(process.env)) {
+    forceNewWhatsAppPairing();
+    upsertIntegration("whatsapp", "in-progress", "Waiting for WhatsApp QR scan");
+  }
   const connection = await startWhatsAppConnector(async (intake) => {
     await captureWhatsAppIntake(intake);
   });
@@ -470,11 +552,16 @@ app.post("/api/requests", (request, response) => {
     requester: String(request.body.requester ?? "pm@local"),
     workspaceId: state.workspace.id,
   });
-  state.requests.unshift(pmRequest);
-  updateStep("request", "succeeded");
-  updateStep("handoff", "succeeded");
-  updateFinalEntryPointStep();
-  state.logs.unshift(`[request] captured ${pmRequest.id} from web form`);
+  const next = upsertPMRequest(state.requests, pmRequest);
+  state.requests = next.requests;
+  if (next.inserted) {
+    updateStep("request", "succeeded");
+    updateStep("handoff", "succeeded");
+    updateFinalEntryPointStep();
+    state.logs.unshift(`[request] captured ${pmRequest.id} from web form`);
+  } else {
+    state.logs.unshift(`[request] reused existing ${pmRequest.id} from web form`);
+  }
   response.json(pmRequest);
 });
 
@@ -717,6 +804,18 @@ function restoreGitHubConnection() {
   }
 }
 
+function connectDemoGitHubSession() {
+  githubConnection.connected = true;
+  githubConnection.login = getCorvinDemoGitHubOwner();
+  githubConnection.name = "Corvin demo";
+  githubConnection.scopes = ["public_repo_demo"];
+  githubConnection.connectedAt = new Date().toISOString();
+  githubConnection.error = undefined;
+  connectCorvinDemoRepositories("GitHub demo session connected with the public frontend and backend repositories");
+  updateFinalEntryPointStep();
+  state.logs.unshift("[github] using public demo repository session");
+}
+
 function persistGitHubConnection() {
   if (!githubConnection.accessToken || !githubConnection.login || !githubConnection.connectedAt) return;
 
@@ -875,6 +974,149 @@ async function startJobRepositories(job: JobRunState) {
   job.status = "healthy";
   job.currentAction = "Localhost preview ready";
   job.updatedAt = new Date().toISOString();
+}
+
+async function runShelfmarkJudgeRequest(judgeRequest: ShelfmarkJudgeRequest) {
+  judgeRequest.status = "running";
+  judgeRequest.summary = "Preparing Shelfmark repository branch.";
+  judgeRequest.updatedAt = new Date().toISOString();
+  state.logs.unshift(`[shelfmark] running ${judgeRequest.id}`);
+
+  const token = getGitHubCloneToken();
+  const workRoot = fileURLToPath(new URL(`../.corvin/shelfmark-requests/${judgeRequest.id}/`, import.meta.url));
+  const repoPath = join(workRoot, "repo");
+  mkdirSync(workRoot, { recursive: true });
+
+  if (token) {
+    await runGit(["clone", "--depth", "1", withGitHubToken(`https://github.com/${judgeRequest.workspace.repo}.git`, token), repoPath]);
+    await runGit(["checkout", "-b", judgeRequest.branchName], repoPath);
+  } else if (existsSync(judgeRequest.workspace.localPath)) {
+    await runGit(["worktree", "add", "-b", judgeRequest.branchName, repoPath, judgeRequest.workspace.defaultBranch], judgeRequest.workspace.localPath);
+  } else {
+    throw new Error("Set GITHUB_TOKEN or SHELFMARK_LOCAL_PATH before judges can create Shelfmark PRs.");
+  }
+
+  const noticePath = join(repoPath, judgeRequest.workspace.noticeFile);
+  writeFileSync(
+    noticePath,
+    renderShelfmarkNoticeModule({
+      body: judgeRequest.body,
+      requester: judgeRequest.requester,
+    }),
+    "utf8",
+  );
+  judgeRequest.changedFiles = [judgeRequest.workspace.noticeFile];
+
+  const verification = [];
+  for (const command of [
+    judgeRequest.workspace.installCommand,
+    judgeRequest.workspace.testCommand,
+    judgeRequest.workspace.buildCommand,
+  ]) {
+    const result = await runShellCommand(command, repoPath);
+    const label = `${command}: ${result.exitCode === 0 ? "passed" : "failed"}`;
+    verification.push(label);
+    state.logs.unshift(`[shelfmark] ${label}`);
+    if (result.exitCode !== 0) {
+      judgeRequest.verification = verification;
+      throw new Error(result.output || `${command} failed`);
+    }
+  }
+  judgeRequest.verification = verification;
+
+  const screenshotUrl = await captureShelfmarkEvidenceScreenshot(judgeRequest);
+  judgeRequest.screenshots = [screenshotUrl];
+
+  await runGit(["add", judgeRequest.workspace.noticeFile], repoPath);
+  const staged = await runGit(["diff", "--cached", "--name-only"], repoPath);
+  if (!staged.trim()) {
+    throw new Error("No Shelfmark file changes were produced.");
+  }
+
+  await runGit(
+    [
+      "-c",
+      "user.name=Corvin",
+      "-c",
+      "user.email=corvin@local",
+      "commit",
+      "-m",
+      `Shelfmark judge request ${judgeRequest.id}`,
+      "-m",
+      "AI-Model: OpenAI GPT-5 Codex",
+    ],
+    repoPath,
+  );
+
+  if (!token) {
+    judgeRequest.status = "failed";
+    judgeRequest.summary = "Local Shelfmark branch created and verified, but GITHUB_TOKEN is required to push and open a PR.";
+    judgeRequest.updatedAt = new Date().toISOString();
+    throw new Error(judgeRequest.summary);
+  }
+
+  await runGit(["push", withGitHubToken(`https://github.com/${judgeRequest.workspace.repo}.git`, token), `HEAD:${judgeRequest.branchName}`], repoPath);
+  const pullRequest = await createGitHubPullRequest(judgeRequest.workspace.repo, token, {
+    title: `Shelfmark judge request ${judgeRequest.id}`,
+    head: judgeRequest.branchName,
+    base: judgeRequest.workspace.defaultBranch,
+    body: renderShelfmarkPullRequestBody({
+      requestBody: judgeRequest.body,
+      requester: judgeRequest.requester,
+      changedFiles: judgeRequest.changedFiles,
+      screenshots: judgeRequest.screenshots,
+      verification: judgeRequest.verification,
+    }),
+  });
+
+  judgeRequest.pullRequestUrl = pullRequest.html_url;
+  judgeRequest.status = "pr-open";
+  judgeRequest.summary = "Shelfmark PR opened with verification and screenshot evidence.";
+  judgeRequest.updatedAt = new Date().toISOString();
+  state.logs.unshift(`[shelfmark] opened ${pullRequest.html_url}`);
+}
+
+async function captureShelfmarkEvidenceScreenshot(judgeRequest: ShelfmarkJudgeRequest) {
+  const relativePath = `${judgeRequest.id}/screenshots/shelfmark-change.png`;
+  const artifactPath = join(".corvin", "jobs", relativePath);
+  mkdirSync(dirname(artifactPath), { recursive: true });
+
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.setContent(
+      [
+        "<!doctype html>",
+        "<html><head><meta charset=\"utf-8\" />",
+        "<style>",
+        "body{margin:0;background:#fbfbfa;color:#1f1f23;font-family:Inter,Arial,sans-serif}",
+        ".shell{padding:56px;max-width:1040px;margin:0 auto}",
+        ".brand{display:flex;gap:12px;align-items:center;margin-bottom:32px}",
+        ".logo{width:44px;height:44px;border-radius:8px;background:#2a2a2f;color:#fbfbfa;display:grid;place-items:center;font-weight:700}",
+        ".panel{border:1px solid #e8e8e5;background:#fff;border-radius:8px;padding:32px}",
+        "h1{font-size:44px;line-height:1.05;margin:0 0 12px;font-weight:600}",
+        "p{font-size:18px;line-height:1.6;color:#6f6f76;margin:0}",
+        ".meta{margin-top:24px;font-family:ui-monospace,monospace;font-size:13px;color:#6f6f76}",
+        "</style></head><body>",
+        '<main class="shell">',
+        '<div class="brand"><div class="logo">S</div><div><strong>Shelfmark</strong><br/><span>Corvin judge-request evidence</span></div></div>',
+        '<section class="panel">',
+        "<h1>Judge-requested update</h1>",
+        `<p>${escapeHtml(judgeRequest.body)}</p>`,
+        `<div class="meta">Requested by ${escapeHtml(judgeRequest.requester)} - ${escapeHtml(judgeRequest.id)}</div>`,
+        "</section>",
+        "</main>",
+        "</body></html>",
+      ].join(""),
+      { waitUntil: "load" },
+    );
+    await page.screenshot({ path: artifactPath, fullPage: true });
+    await page.close();
+  } finally {
+    await browser.close();
+  }
+
+  return `/artifacts/${relativePath}`;
 }
 
 async function runGit(args: string[], cwd = ".") {
@@ -1499,6 +1741,10 @@ function syncWhatsAppConnection(connection: { connected: boolean; status: string
     upsertIntegration("whatsapp", "connected", connection.detail);
     updateStep("whatsapp-entry", "succeeded");
     updateFinalEntryPointStep();
+    return;
+  }
+  if (connectedDemoStart && isIntegrationConnected("whatsapp") && connection.status === "connecting") {
+    state.logs.unshift("[whatsapp] listener reconnecting with saved demo session");
     return;
   }
   if (connection.status === "qr" || connection.status === "connecting") {

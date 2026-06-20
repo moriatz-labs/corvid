@@ -1,4 +1,5 @@
 import path from "node:path";
+import { rmSync } from "node:fs";
 import makeWASocket, {
   DisconnectReason,
   jidNormalizedUser,
@@ -51,22 +52,50 @@ export async function startWhatsAppConnector(handler: MessageHandler): Promise<W
   }
 }
 
+export function shouldReuseWhatsAppSession(env: Record<string, string | undefined>): boolean {
+  return env.CORVIN_WHATSAPP_REUSE_SESSION === "true";
+}
+
+export function shouldCaptureWhatsAppMessage(input: {
+  body?: string;
+  messageId?: string;
+  chatId?: string;
+  from?: string;
+  fromMe?: boolean;
+}): boolean {
+  if (!input.body || !input.messageId || !input.chatId || !input.from) {
+    return false;
+  }
+
+  if (!input.fromMe) {
+    return true;
+  }
+
+  return isCorvinCommand(input.body);
+}
+
+export function forceNewWhatsAppPairing(): void {
+  manualRestart = true;
+  socket?.end(new Error("Starting a fresh WhatsApp pairing session"));
+  socket = null;
+  starting = null;
+  connectedNoticeSentFor = null;
+  rmSync(authDirectory, { recursive: true, force: true });
+  snapshot = {
+    status: "idle",
+    connected: false,
+    detail: "Start WhatsApp pairing to show a new QR",
+  };
+  manualRestart = false;
+}
+
 export function getWhatsAppSnapshot(): WhatsAppSnapshot {
   return snapshot;
 }
 
 export async function refreshWhatsAppConnector(handler: MessageHandler): Promise<WhatsAppSnapshot> {
   onMessage = handler;
-  manualRestart = true;
-  socket?.end(new Error("Refreshing WhatsApp QR"));
-  socket = null;
-  starting = null;
-  snapshot = {
-    status: "idle",
-    connected: false,
-    detail: "Refreshing WhatsApp QR",
-  };
-  manualRestart = false;
+  forceNewWhatsAppPairing();
   return startWhatsAppConnector(handler);
 }
 
@@ -134,7 +163,12 @@ async function createSocket(): Promise<WhatsAppSnapshot> {
       const messageId = message.key.id;
       const chatId = message.key.remoteJid;
       const from = message.key.participant?.split("@")[0] ?? chatId?.split("@")[0];
-      if (!body || !messageId || !chatId || !from || message.key.fromMe) {
+      const fromMe = message.key.fromMe === true;
+      if (!body || !messageId || !chatId || !from) {
+        continue;
+      }
+
+      if (!shouldCaptureWhatsAppMessage({ body, messageId, chatId, from, fromMe })) {
         continue;
       }
 
@@ -168,4 +202,13 @@ function extractText(message: proto.IMessage | null | undefined): string | undef
 function extractWorkspaceHint(text: string): string | undefined {
   const match = text.match(/\bcorvin\s+([\w-]+)\s*:/i);
   return match?.[1];
+}
+
+function isCorvinCommand(text: string): boolean {
+  const normalized = text.trim();
+  if (!/^corvin\b/i.test(normalized)) {
+    return false;
+  }
+
+  return !/^corvin\s+captured\b/i.test(normalized);
 }

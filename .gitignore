@@ -7,4 +7,6 @@ dist/
 .corvin/jobs/
 .corvin/github-auth.json
 .corvin/repository-publish/
+.corvin/shelfmark-requests/
+.corvin/*.png
 .vercel

@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  createConnectedDemoStartState,
   createCorvinDemoBlueprint,
   createDemoModeState,
 } from "../src/shared/demo";
+import { shouldRestoreGitHubSession } from "../server/github-session";
+import {
+  shouldCaptureWhatsAppMessage,
+  shouldReuseWhatsAppSession,
+} from "../server/whatsapp";
 import {
   buildGitHubAuthorizeUrl,
   buildExecRunPlan,
@@ -20,6 +26,7 @@ import {
   promoteStagingToProduction,
   renderExecMarkdown,
   stageRequestedChange,
+  upsertPMRequest,
   generateComposeFile,
   parseWhatsAppPayload,
   validateExecDocument,
@@ -511,6 +518,38 @@ Missing essentials should block save.
     expect(request.status).toBe("captured");
   });
 
+  it("creates a PM request from a WhatsApp message with only a Corvin prefix", () => {
+    const request = createRequestFromWhatsAppMessage(
+      {
+        from: "15551234567",
+        messageId: "wamid.simple-demo",
+        text: "Corvin change checkout headline",
+      },
+      blueprint,
+    );
+
+    expect(request.workspaceId).toBe("acme-checkout");
+    expect(request.title).toBe("Change checkout headline");
+    expect(request.body).toBe("change checkout headline");
+  });
+
+  it("keeps web request capture idempotent for repeated clicks", () => {
+    const request = createWebRequest({
+      title: "Copy change",
+      body: "Change checkout headline.",
+      requester: "pm@demo.local",
+      workspaceId: "corvin-demo-app",
+    });
+
+    const first = upsertPMRequest([], request);
+    const second = upsertPMRequest(first.requests, request);
+
+    expect(first.inserted).toBe(true);
+    expect(second.inserted).toBe(false);
+    expect(second.requests).toHaveLength(1);
+    expect(second.requests[0].id).toBe(request.id);
+  });
+
   it("builds a GitHub authorization URL with state and scopes", () => {
     const url = buildGitHubAuthorizeUrl({
       clientId: "client_123",
@@ -552,6 +591,44 @@ Missing essentials should block save.
     expect(connect.detail).toBe("Scan the QR code in WhatsApp");
     expect(connect.webhookUrl).toBe("http://localhost:8787/webhooks/whatsapp");
     expect(connect.qrImageUrl).toBe("data:image/png;base64,qr");
+  });
+
+  it("does not reuse a saved WhatsApp session unless explicitly enabled", () => {
+    expect(shouldReuseWhatsAppSession({})).toBe(false);
+    expect(shouldReuseWhatsAppSession({ CORVIN_WHATSAPP_REUSE_SESSION: "false" })).toBe(false);
+    expect(shouldReuseWhatsAppSession({ CORVIN_WHATSAPP_REUSE_SESSION: "true" })).toBe(true);
+  });
+
+  it("accepts same-account WhatsApp demo commands and ignores bot replies", () => {
+    expect(shouldCaptureWhatsAppMessage({
+      body: "Corvin change checkout headline",
+      messageId: "wamid.self-command",
+      chatId: "15551234567@s.whatsapp.net",
+      from: "15551234567",
+      fromMe: true,
+    })).toBe(true);
+
+    expect(shouldCaptureWhatsAppMessage({
+      body: "Corvin captured: Change checkout headline",
+      messageId: "wamid.bot-reply",
+      chatId: "15551234567@s.whatsapp.net",
+      from: "15551234567",
+      fromMe: true,
+    })).toBe(false);
+
+    expect(shouldCaptureWhatsAppMessage({
+      body: "change checkout headline",
+      messageId: "wamid.inbound-user",
+      chatId: "15550001111@s.whatsapp.net",
+      from: "15550001111",
+      fromMe: false,
+    })).toBe(true);
+  });
+
+  it("does not restore a saved GitHub session unless explicitly enabled", () => {
+    expect(shouldRestoreGitHubSession({})).toBe(false);
+    expect(shouldRestoreGitHubSession({ CORVIN_GITHUB_RESTORE_SESSION: "false" })).toBe(false);
+    expect(shouldRestoreGitHubSession({ CORVIN_GITHUB_RESTORE_SESSION: "true" })).toBe(true);
   });
 
   it("creates an OpenAI-only change plan when no API key is available", () => {
@@ -646,7 +723,7 @@ describe("demo mode workflow", () => {
     expect(job.changedFiles).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ repositoryId: "frontend", path: "src/App.tsx", status: "modified" }),
-        expect.objectContaining({ repositoryId: "backend", path: "docs/checkout-copy.md", status: "added" }),
+        expect.objectContaining({ repositoryId: "backend", path: "src/server.ts", status: "modified" }),
       ]),
     );
     expect(job.reviewIterations.length).toBeGreaterThanOrEqual(3);
@@ -657,6 +734,34 @@ describe("demo mode workflow", () => {
         expect.stringContaining("opened pull request"),
       ]),
     );
+  });
+
+  it("starts the live demo connected and waits for a real WhatsApp request", () => {
+    const state = createConnectedDemoStartState();
+    const parsedExec = parseExecMarkdown(state.exec.markdown);
+
+    expect(parsedExec.ok).toBe(true);
+    expect(state.integrations.map((integration) => integration.status)).toEqual([
+      "connected",
+      "connected",
+      "ready",
+    ]);
+    expect(state.exec.validation.ready).toBe(true);
+    expect(state.requests).toEqual([]);
+    expect(state.jobs).toEqual([]);
+    expect(canCapturePMRequest(state.workspace, state.validation, state.exec)).toBe(true);
+
+    const request = createRequestFromWhatsAppMessage(
+      {
+        from: "15551234567",
+        messageId: "wamid.live-demo",
+        text: "Corvin explain every checkout charge before payment",
+      },
+      state.workspace,
+    );
+
+    expect(request.body).toBe("explain every checkout charge before payment");
+    expect(request.workspaceId).toBe("corvin-demo-app");
   });
 
   it("shows the finished local, staging, and production review path", () => {

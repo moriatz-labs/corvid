@@ -34,10 +34,10 @@ body {
 }
 
 h1 {
-  max-width: 12ch;
+  max-width: 13ch;
   margin: 0;
-  font-size: clamp(2.5rem, 7vw, 5.5rem);
-  line-height: 0.95;
+  font-size: clamp(2.25rem, 6vw, 4.75rem);
+  line-height: 1;
   letter-spacing: 0;
 }
 
@@ -63,11 +63,25 @@ h1 {
 }
 
 .summary span {
+  display: grid;
+  gap: 4px;
   color: #6f6f76;
+}
+
+.summary small {
+  color: #8b8b91;
+  font-size: 0.82rem;
 }
 
 .total {
   font-size: 1.15rem;
+}
+
+.payment-note {
+  margin: -12px 0 24px;
+  color: #6f6f76;
+  font-size: 0.95rem;
+  line-height: 1.55;
 }
 
 button {

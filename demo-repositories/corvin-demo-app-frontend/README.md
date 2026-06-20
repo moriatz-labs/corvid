@@ -2,6 +2,9 @@
 
 React/Vite frontend for the public Corvin demo app.
 
+Demo goal: make the checkout explain every charge before payment. The frontend
+renders the headline, charge rows, and payment note returned by the backend.
+
 ```bash
 npm install
 npm run dev -- --host 0.0.0.0

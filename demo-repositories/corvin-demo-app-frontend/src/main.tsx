@@ -4,13 +4,43 @@ import "./styles.css";
 
 type CheckoutSummary = {
   plan: string;
+  headline: string;
+  subcopy: string;
+  charges: Array<{
+    label: string;
+    detail: string;
+    amount: number;
+  }>;
   subtotal: number;
   tax: number;
   total: number;
   currency: string;
+  paymentNote: string;
 };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
+const fallbackSummary: CheckoutSummary = {
+  plan: "Growth",
+  headline: "Review every charge before payment.",
+  subcopy: "The checkout shows plan, tax, and total before the payment button.",
+  charges: [
+    {
+      label: "Growth plan",
+      detail: "Monthly subscription",
+      amount: 49,
+    },
+    {
+      label: "Estimated tax",
+      detail: "Calculated before payment",
+      amount: 4,
+    },
+  ],
+  subtotal: 49,
+  tax: 4,
+  total: 53,
+  currency: "USD",
+  paymentNote: "No payment is submitted until the customer confirms this total.",
+};
 
 function App() {
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
@@ -20,43 +50,38 @@ function App() {
       .then((response) => response.json())
       .then((payload: CheckoutSummary) => setSummary(payload))
       .catch(() => {
-        setSummary({
-          plan: "Growth",
-          subtotal: 49,
-          tax: 4,
-          total: 53,
-          currency: "USD",
-        });
+        setSummary(fallbackSummary);
       });
   }, []);
+
+  const checkout = summary ?? fallbackSummary;
 
   return (
     <main className="page-shell">
       <section className="checkout">
         <p className="eyebrow">Corvin demo checkout</p>
-        <h1>Checkout built for fast-growing teams.</h1>
-        <p className="lede">
-          Review your plan, confirm every charge, and complete payment from a
-          focused checkout surface.
-        </p>
+        <h1>{checkout.headline}</h1>
+        <p className="lede">{checkout.subcopy}</p>
         <div className="summary" aria-label="Checkout summary">
           <div>
             <span>Plan</span>
-            <strong>{summary?.plan ?? "Loading"}</strong>
+            <strong>{checkout.plan}</strong>
           </div>
-          <div>
-            <span>Subtotal</span>
-            <strong>{formatMoney(summary?.subtotal ?? 0, summary?.currency)}</strong>
-          </div>
-          <div>
-            <span>Estimated tax</span>
-            <strong>{formatMoney(summary?.tax ?? 0, summary?.currency)}</strong>
-          </div>
+          {checkout.charges.map((charge) => (
+            <div key={charge.label}>
+              <span>
+                {charge.label}
+                <small>{charge.detail}</small>
+              </span>
+              <strong>{formatMoney(charge.amount, checkout.currency)}</strong>
+            </div>
+          ))}
           <div className="total">
             <span>Total due today</span>
-            <strong>{formatMoney(summary?.total ?? 0, summary?.currency)}</strong>
+            <strong>{formatMoney(checkout.total, checkout.currency)}</strong>
           </div>
         </div>
+        <p className="payment-note">{checkout.paymentNote}</p>
         <button type="button">Complete payment</button>
       </section>
     </main>

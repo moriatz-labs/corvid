@@ -26,7 +26,7 @@ export function createCorvinDemoBlueprint(owner = defaultDemoOwner): WorkspaceBl
   setupStatus: "ready",
   pmRunCommand: "npx corvin run corvin-demo-app",
   executionScriptSummary:
-    "Engineering supplied the execution script for the public Corvin demo app; Corvin agents resolve the frontend and backend repositories, branch alignment, environment, startup order, and health checks.",
+    "Engineering supplied a minimal frontend plus backend execution script for the public Corvin demo app. The demo request should touch both repositories: backend returns clearer checkout charge data, frontend displays it for PM review.",
   engineeringIntake: [
     {
       id: "repository-map",
@@ -72,7 +72,7 @@ export function createCorvinDemoBlueprint(owner = defaultDemoOwner): WorkspaceBl
       sourceRef: `synced-repo://${owner}/corvin-demo-app-frontend`,
       defaultBranch: "main",
       localPath: "repos/frontend",
-      purpose: "React/Vite customer checkout and PM-visible product surface for the demo app.",
+      purpose: "React/Vite checkout UI that renders the clearer charge review experience.",
       startupCommand: "npm install && npm run dev -- --host 0.0.0.0",
       branchCoupling: "Use the same feature branch as backend when checkout API contracts change.",
     },
@@ -82,7 +82,7 @@ export function createCorvinDemoBlueprint(owner = defaultDemoOwner): WorkspaceBl
       sourceRef: `synced-repo://${owner}/corvin-demo-app-backend`,
       defaultBranch: "main",
       localPath: "repos/backend",
-      purpose: "Express/Node checkout summary and health API for the demo app.",
+      purpose: "Express/Node API that owns checkout charges, totals, and payment-note copy.",
       startupCommand: "npm install && npm run dev",
       branchCoupling: "Must match frontend branch when response schema changes.",
     },
@@ -341,6 +341,77 @@ export function createInitialState(): MvpState {
   };
 }
 
+export function createConnectedDemoStartState(): MvpState {
+  const base = createInitialState();
+  const parsedExec = parseExecMarkdown(base.exec.markdown);
+  if (!parsedExec.ok) {
+    throw new Error("Demo exec.md could not be parsed.");
+  }
+
+  const env = {
+    VITE_API_BASE_URL: "http://localhost:3000",
+    PORT: "3000",
+    WHATSAPP_VERIFY_TOKEN: "local-dev",
+  };
+  const execValidation = validateExecDocument(parsedExec.document, env);
+  const execRunPlan = buildExecRunPlan(parsedExec.document, env);
+
+  return {
+    ...base,
+    exec: {
+      exists: true,
+      markdown: base.exec.markdown,
+      validation: execValidation,
+      runPlan: execRunPlan.plan,
+    },
+    integrations: base.integrations.map((integration) => {
+      if (integration.id === "whatsapp") {
+        return {
+          ...integration,
+          status: "connected" as const,
+          detail: "WhatsApp is connected for the live demo. Send a message that starts with Corvin.",
+        };
+      }
+      if (integration.id === "github") {
+        return {
+          ...integration,
+          status: "connected" as const,
+          detail: "GitHub is connected with the public frontend and backend demo repositories.",
+        };
+      }
+      return {
+        ...integration,
+        status: "ready" as const,
+        detail: "Local runner is in demo-safe mode.",
+      };
+    }),
+    steps: base.steps.map((step) => {
+      if (["request", "handoff", "whatsapp-github-ready"].includes(step.id)) {
+        return { ...step, status: "pending" as const };
+      }
+      return { ...step, status: "succeeded" as const };
+    }),
+    logs: [
+      "[demo] connected start enabled: WhatsApp and GitHub are ready",
+      "[exec] exec.md validated with frontend and backend repositories",
+      "[github] corvin-demo-app frontend and backend connected",
+      "[whatsapp] waiting for a PM message that starts with Corvin",
+    ],
+    requests: [],
+    jobs: [],
+    running: false,
+    openAI: {
+      ...base.openAI,
+      lastPlan: createOpenAIChangePlan({
+        requestBody: "Waiting for a WhatsApp request that starts with Corvin.",
+        pmName: base.pm.name,
+        workspaceName: base.workspace.name,
+        openAIConfigured: false,
+      }),
+    },
+  };
+}
+
 export function createDemoModeState(): MvpState {
   const base = createInitialState();
   const request = {
@@ -389,8 +460,8 @@ export function createDemoModeState(): MvpState {
       "[demo] loaded exec.md and repository map for corvin-demo-app",
       "[github] cloned Paul-M-Kallarackal/corvin-demo-app-frontend and Paul-M-Kallarackal/corvin-demo-app-backend into the job workspace",
       "[branch] created corvin/req_change-checkout-headline across frontend and backend",
-      "[openai] planned copy-only checkout change with repo context",
-      "[edit] updated src/App.tsx and added docs/checkout-copy.md",
+      "[openai] planned checkout charge clarity change with frontend and backend context",
+      "[edit] updated src/App.tsx and src/server.ts",
       "[verify] ran lint, tests, and local preview capture",
       "[review] attached summary, screenshots, and diff evidence",
       "[github] opened pull request for engineering review",
@@ -403,8 +474,8 @@ export function createDemoModeState(): MvpState {
       },
       {
         repositoryId: "backend",
-        path: "docs/checkout-copy.md",
-        status: "added",
+        path: "src/server.ts",
+        status: "modified",
       },
       {
         repositoryId: "frontend",
@@ -417,8 +488,8 @@ export function createDemoModeState(): MvpState {
       "- Checkout built for fast-growing teams.",
       "+ Checkout that explains every charge before you pay.",
       "",
-      "diff --git a/docs/checkout-copy.md b/docs/checkout-copy.md",
-      "+ PM request, implementation notes, preview URLs, and verification logs.",
+      "diff --git a/src/server.ts b/src/server.ts",
+      "+ headline, charge rows, and payment note returned from /api/checkout-summary.",
     ].join("\n"),
     pullRequests: [
       {
@@ -434,8 +505,8 @@ export function createDemoModeState(): MvpState {
         id: "review-1",
         model: "gpt-5.5",
         mode: "fallback",
-        feedback: "Confirm the request is copy-only and can stay inside the checkout frontend surface.",
-        summary: "Classified as low-risk copy change with frontend-only visible impact.",
+        feedback: "Confirm the request needs both checkout UI and API summary changes.",
+        summary: "Classified as a low-risk cross-repo checkout clarity change.",
         targetFile: "src/App.tsx",
         createdAt: "2026-06-14T09:34:00.000Z",
       },
@@ -517,7 +588,7 @@ export function createDemoModeState(): MvpState {
       "[github] corvin-demo-app frontend and backend connected from demo context",
       "[runner] job workspace created at C:/Users/maya/corvin-jobs/job_req_change-checkout-headline",
       "[openai] request planned with OpenAI-only routing in demo mode",
-      "[changes] modified src/App.tsx and added docs/checkout-copy.md",
+      "[changes] modified frontend src/App.tsx and backend src/server.ts",
       "[verify] lint, tests, preview, and screenshot evidence completed",
       "[pr] opened pull request https://github.com/Paul-M-Kallarackal/corvin-demo-app-frontend/pull/184",
     ],

@@ -438,7 +438,10 @@ export function createRequestFromWhatsAppMessage(
   intake: WhatsAppIntake,
   workspace: WorkspaceBlueprint,
 ): PMRequest {
-  const body = intake.text.replace(/^corvin\s+[\w-]+:\s*/i, "").trim();
+  const body = intake.text
+    .replace(/^corvin\s+[\w-]+:\s*/i, "")
+    .replace(/^corvin:?\s*/i, "")
+    .trim();
   const title = titleCase(body || intake.text);
 
   return {
@@ -468,6 +471,20 @@ export function createWebRequest(input: {
     workspaceId: input.workspaceId,
     status: "captured",
     createdAt: new Date().toISOString(),
+  };
+}
+
+export function upsertPMRequest(requests: PMRequest[], request: PMRequest): { requests: PMRequest[]; inserted: boolean } {
+  if (requests.some((item) => item.id === request.id)) {
+    return {
+      requests,
+      inserted: false,
+    };
+  }
+
+  return {
+    requests: [request, ...requests],
+    inserted: true,
   };
 }
 
